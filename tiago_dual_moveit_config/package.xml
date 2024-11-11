@@ -1,0 +1,35 @@
+<package format="3">
+  <name>tiago_dual_moveit_config</name>
+  <version>2.0.8</version>
+  <description>
+     An automatically generated package with all the configuration and launch files for using the tiago dual with the MoveIt Motion Planning Framework
+  </description>
+  <author email="assistant@moveit.ros.org">MoveIt Setup Assistant</author>
+  <maintainer email="tiago-support@pal-robotics.com">TIAGo PAL support team</maintainer>
+  <maintainer email="david.terkuile@pal-robotics.com">David ter Kuile</maintainer>
+
+  <license>Apache License 2.0</license>
+
+  <url type="website">https://github.com/pal-robotics/tiago_simulation</url>
+
+  <buildtool_depend>ament_cmake_auto</buildtool_depend>
+
+  <build_depend condition="$PAL_DISTRO >= alum">pal_module_cmake</build_depend>
+
+  <exec_depend>launch_pal</exec_depend>
+  <exec_depend>moveit_configs_utils</exec_depend>
+  <exec_depend>moveit_ros_control_interface</exec_depend>
+  <exec_depend>moveit_ros_move_group</exec_depend>
+  <exec_depend>moveit_kinematics</exec_depend>
+  <exec_depend>moveit_planners_ompl</exec_depend>
+  <exec_depend>moveit_ros_visualization</exec_depend>
+  <exec_depend>moveit_ros_perception</exec_depend>
+  <exec_depend>tiago_dual_description</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+      <build_type>ament_cmake</build_type>
+    </export>
+</package>
