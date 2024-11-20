@@ -5,6 +5,7 @@ A script to outline the fundamentals of the moveit_py motion planning API.
 
 import time
 import threading
+import math
 
 # generic ros libraries
 import rclpy
@@ -26,16 +27,18 @@ from moveit.planning import (
 
 from geometry_msgs.msg import PoseStamped
 from control_msgs.action import FollowJointTrajectory
+import rclpy.task
 from trajectory_msgs.msg import JointTrajectoryPoint
+from control_msgs.msg import JointTrajectoryControllerState
 from tf_transformations import euler_from_quaternion
 
-class TiagoDualPy():
+class TiagoDualPy(Node):
     def __init__(self, name='moveit_py'):
-
+        super().__init__(name)
         self.logger = get_logger(f'tiago_dual.{name}')
         # instantiate MoveItPy instance and get planning component
         self.tiago_dual = MoveItPy(node_name=name)
-        trajectory_execution = self.tiago_dual.get_trajactory_execution_manager()
+        trajectory_execution = self.tiago_dual.get_trajectory_execution_manager()
         assert isinstance(trajectory_execution, TrajectoryExecutionManager)
         trajectory_execution.enable_execution_duration_monitoring(True)
         trajectory_execution.set_allowed_execution_duration_scaling(1.2)
@@ -58,6 +61,98 @@ class TiagoDualPy():
         self.gripper_links['left'] = 'arm_left_tool_link'
         #ADD GRIPPER GROUPS
         self.logger.info("MoveItPy instance created")
+
+    def get_joint_states(self, topic):
+        self.logger.info("Obtaining joint states...")
+        future = rclpy.task.Future()
+
+        def callback(msg):
+            if not future.done():
+                future.set_result(msg)
+
+        subscription = self.create_subscription(
+            JointTrajectoryControllerState,
+            topic,
+            callback,
+            1
+        )
+
+        rclpy.spin_until_future_complete(self, future)
+
+        self.destroy_subscription(subscription)
+
+        result = future.result()
+        assert isinstance(result, JointTrajectoryControllerState)
+        joint_names = result.joint_names
+        joint_positions = list(result.reference.positions)
+        joint_states = dict(zip(joint_names, joint_positions))
+
+        return joint_states
+
+    def move_head(self, left_right, up_down, vel_factor = 0.1, sleep_time = 0.1):
+        action_name = "/head_controller/follow_joint_trajectory"
+        action_client = ActionClient(self, FollowJointTrajectory, action_name)
+
+        point = JointTrajectoryPoint()
+        point.positions = [left_right, up_down]
+        joint_states = self.get_joint_states("/head_controller/controller_state")
+        delta_left_right = abs(joint_states['head_1_joint'] - left_right)
+        delta_up_down = abs(joint_states['head_2_joint'] - up_down)
+        distance = math.sqrt(delta_left_right**2 + delta_up_down**2)
+        duration = distance/vel_factor
+        point.time_from_start.sec = int(duration)
+        point.time_from_start.nanosec = int((duration - int(duration)) * 1e9)
+
+        msg = FollowJointTrajectory.Goal()
+        msg.trajectory.joint_names = ['head_1_joint', 'head_2_joint']
+        msg.trajectory.points = [point]
+        self.logger.info(f"Moving head to: {left_right},{up_down}")
+        future = action_client.send_goal_async(msg)
+        time.sleep(duration + sleep_time)
+        return future
+
+    def close_gripper(self, arm, vel_factor = 0.1, sleep_time=0.1):
+        point = JointTrajectoryPoint()
+        point.positions = [0.0, 0.0]
+        self.logger.info("Closing gripper")
+        future = self.gripper_action(arm, point, vel_factor, sleep_time)
+        return future
+
+    def open_gripper(self, arm, vel_factor = 0.1, sleep_time=0.1):
+        point = JointTrajectoryPoint()
+        point.positions = [0.044, 0.044]
+        self.logger.info("Opening gripper")
+        future = self.gripper_action(arm, point, vel_factor, sleep_time)
+        return future
+
+    def move_gripper (self, arm, left_finger, right_finger, vel_factor = 0.1, sleep_time = 0.1):
+        point = JointTrajectoryPoint()
+        point.positions = [right_finger, left_finger]
+        self.logger.info(f"Moving {arm} gripper to: {right_finger},{left_finger}")
+        future = self.gripper_action(arm, point, vel_factor, sleep_time)
+        return future
+    
+    def gripper_action(self, arm, point:JointTrajectoryPoint, vel_factor, sleep_time):
+        if arm == 'left' or arm == 'right':
+            msg = FollowJointTrajectory.Goal()
+            action_name = f"/gripper_{arm}_controller/follow_joint_trajectory"
+            action_client = ActionClient(self, FollowJointTrajectory, action_name)
+        else:
+            self.logger.error('Wrong Arm Selected: Arm must be "left" or "right".')
+            return False
+        
+        joint_states = self.get_joint_states(f"/gripper_{arm}_controller/controller_state")
+        joint_goals = list(point.positions)
+        distances = [abs(joint_states[f"gripper_{arm}_right_finger_joint"]-joint_goals[0]),abs(joint_states[f"gripper_{arm}_left_finger_joint"]-joint_goals[1])]
+        duration = (max(distances)/vel_factor)*2
+        point.time_from_start.sec = int(duration)
+        
+        point.time_from_start.nanosec = int((duration - int(duration)) * 1e9)
+        msg.trajectory.joint_names = [f"gripper_{arm}_right_finger_joint", f"gripper_{arm}_left_finger_joint"]
+        msg.trajectory.points = [point]
+        future = action_client.send_goal_async(msg)
+        time.sleep(duration + sleep_time)
+        return future
 
     def arm_go_to_named_pose(self, arm: str, pose_name: str, vel_factor=0.2, sleep_time=0.1): #TODO: Add acceleration and velocity scaling to all methods
         if arm=='left' or arm=='right':
@@ -227,7 +322,7 @@ def main():
 
     # call arm method
     logger.info('Moving to goal pose 1 right')
-    tiago_dual.arm_go_to_pose('right', pose_goal, vel_factor=1)
+    tiago_dual.arm_go_to_pose('right', pose_goal, vel_factor=0.2)
 
     #Left arm pose
     pose_goal = PoseStamped()
@@ -244,7 +339,7 @@ def main():
 
     # call arm method
     logger.info('Moving to goal pose 1 left')
-    tiago_dual.arm_go_to_pose('left', pose_goal, vel_factor=1)
+    tiago_dual.arm_go_to_pose('left', pose_goal, vel_factor=0.2)
 
 
     #Right arm pose
@@ -261,7 +356,7 @@ def main():
 
     # call arm method
     logger.info('Moving to goal pose 2 right')
-    tiago_dual.arm_go_to_pose('right', pose_goal, vel_factor=1)
+    tiago_dual.arm_go_to_pose('right', pose_goal, vel_factor=0.2)
 
 
 
@@ -276,7 +371,7 @@ def main():
 
         # call arm method
     logger.info('Moving to goal pose 2 left')
-    tiago_dual.arm_go_to_pose('left', pose_goal, vel_factor=1)
+    tiago_dual.arm_go_to_pose('left', pose_goal, vel_factor=0.2)
 
 
     ###########################################################################
@@ -308,7 +403,7 @@ def main():
     pose_goal_l.pose.position.z = 0.4
 
     logger.info('Moving to goal pose 1 dual')
-    tiago_dual.dual_arm_go_to_pose(pose_goal_r, pose_goal_l, 0.1, vel_factor=1.0)
+    tiago_dual.dual_arm_go_to_pose(pose_goal_r, pose_goal_l, 0.1, vel_factor=0.2)
 
     #Right arm pose
     pose_goal_r.header.frame_id = "base_footprint"
@@ -332,7 +427,7 @@ def main():
     pose_goal_l.pose.position.z = 1.2
 
     logger.info('Moving to goal pose 2 dual')
-    tiago_dual.dual_arm_go_to_pose(pose_goal_r, pose_goal_l, 0.3, vel_factor=1.0)
+    tiago_dual.dual_arm_go_to_pose(pose_goal_r, pose_goal_l, 0.3, vel_factor=0.2)
 
 
 
