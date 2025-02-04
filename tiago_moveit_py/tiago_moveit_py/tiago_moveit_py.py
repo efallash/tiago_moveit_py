@@ -32,7 +32,7 @@ class TiagoPy():
         self.logger = get_logger(f'tiago.{name}')
         # instantiate MoveItPy instance and get planning component
         self.thor = MoveItPy(node_name=name)
-        #self.execution_manager=self.thor.get_trajactory_execution_manager()
+        #self.execution_manager=self.thor.get_trajectory_execution_manager()
         self.thor_arm = self.thor.get_planning_component("arm")
         self.logger.info("MoveItPy instance created")
 

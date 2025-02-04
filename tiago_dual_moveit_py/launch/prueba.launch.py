@@ -15,18 +15,20 @@
 import os
 from pathlib import Path
 
-from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
 from launch_pal.arg_utils import read_launch_argument
 from launch_ros.actions import Node
 
 from moveit_configs_utils import MoveItConfigsBuilder
-from tiago_dual_description.launch_arguments import TiagoDualArgs
-from tiago_dual_description.tiago_dual_launch_utils import get_tiago_dual_hw_suffix
 from launch_pal.arg_utils import LaunchArgumentsBase
 from launch_pal.robot_arguments import CommonArgs
+from tiago_dual_description.launch_arguments import TiagoDualArgs
+from tiago_dual_description.tiago_dual_launch_utils import get_tiago_dual_hw_suffix
+
 from dataclasses import dataclass
+from ament_index_python.packages import get_package_share_directory
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,7 @@ class LaunchArguments(LaunchArgumentsBase):
     ft_sensor_right: DeclareLaunchArgument = TiagoDualArgs.ft_sensor_right
     ft_sensor_left: DeclareLaunchArgument = TiagoDualArgs.ft_sensor_left
     use_sim_time: DeclareLaunchArgument = CommonArgs.use_sim_time
+    use_sensor_manager: DeclareLaunchArgument = CommonArgs.use_sensor_manager
 
 
 def generate_launch_description():
@@ -56,11 +59,11 @@ def generate_launch_description():
 
 def declare_actions(launch_description: LaunchDescription, launch_args: LaunchArguments):
 
-    launch_description.add_action(OpaqueFunction(function=start_rviz))
+    launch_description.add_action(OpaqueFunction(function=start_move_group))
     return
 
 
-def start_rviz(context, *args, **kwargs):
+def start_move_group(context, *args, **kwargs):
 
     base_type = read_launch_argument("base_type", context)
     arm_type_right = read_launch_argument('arm_type_right', context)
@@ -69,6 +72,7 @@ def start_rviz(context, *args, **kwargs):
     end_effector_left = read_launch_argument('end_effector_left', context)
     ft_sensor_right = read_launch_argument('ft_sensor_right', context)
     ft_sensor_left = read_launch_argument('ft_sensor_left', context)
+    use_sensor_manager = read_launch_argument('use_sensor_manager', context)
 
     hw_suffix = get_tiago_dual_hw_suffix(
         arm_right=arm_type_right,
@@ -84,6 +88,10 @@ def start_rviz(context, *args, **kwargs):
         )
     )
 
+    kinematics_file_path = os.path.join(get_package_share_directory("tiago_dual_moveit_config"), 'config', 'kinematics_kdl.yaml')
+    pilz_limit_file_path = os.path.join(get_package_share_directory("tiago_dual_moveit_config"), 'config', 'pilz_cartesian_limits.yaml')
+
+
     srdf_input_args = {
         "arm_type_right": arm_type_right,
         "arm_type_left": arm_type_left,
@@ -98,34 +106,50 @@ def start_rviz(context, *args, **kwargs):
     moveit_simple_controllers_path = (
         f'config/controllers/controllers{hw_suffix}.yaml')
 
+    planning_scene_monitor_parameters = {
+        'publish_planning_scene': True,
+        'publish_geometry_updates': True,
+        'publish_state_updates': True,
+        'publish_transforms_updates': True,
+    }
+
     # The robot description is read from the topic /robot_description if the parameter is empty
     moveit_config = (
         MoveItConfigsBuilder('tiago_dual')
         .robot_description_semantic(file_path=srdf_file_path, mappings=srdf_input_args)
-        .robot_description_kinematics(file_path=os.path.join('config', 'kinematics_kdl.yaml'))
+        .robot_description_kinematics(file_path=kinematics_file_path)
         .trajectory_execution(moveit_simple_controllers_path)
         .planning_pipelines(pipelines=['ompl'])
-        .pilz_cartesian_limits(file_path=os.path.join('config', 'pilz_cartesian_limits.yaml'))
-        .to_moveit_configs()
+        .planning_scene_monitor(planning_scene_monitor_parameters)
+        .pilz_cartesian_limits(file_path=pilz_limit_file_path)
+        .moveit_cpp(
+        file_path=get_package_share_directory("tiago_dual_moveit_py")
+        + "/config/motion_planning.yaml")
     )
 
-    # RViz
-    rviz_base = os.path.join(get_package_share_directory(
-        'tiago_dual_moveit_config'), 'config', 'rviz')
-    rviz_full_config = os.path.join(rviz_base, 'moveit.rviz')
-    rviz_node = Node(
-        package='rviz2',
-        executable='rviz2',
-        output='log',
-        arguments=['-d', rviz_full_config],
-        emulate_tty=True,
-        parameters=[
-            {"robot_description_timeout": 90.0},
-            moveit_config.robot_description,
-            moveit_config.robot_description_semantic,
-            moveit_config.planning_pipelines,
-            moveit_config.robot_description_kinematics,
-        ],
+    if use_sensor_manager:
+        # moveit_sensors path
+        moveit_sensors_path = 'config/sensors_3d.yaml'
+        moveit_config.sensors_3d(moveit_sensors_path)
+
+    moveit_config.to_moveit_configs()
+
+    move_group_configuration = {
+        "use_sim_time": LaunchConfiguration("use_sim_time"),
+        "publish_robot_description_semantic": True,
+    }
+
+    move_group_params = [
+        moveit_config.to_dict(),
+        move_group_configuration,
+    ]
+
+    moveit_py_node = Node(
+        name="tiago_dual_moveit_py_test",
+        package="tiago_dual_moveit_py",
+        executable="prueba",
+        output="both",
+        parameters=move_group_params,
     )
 
-    return [rviz_node]
+    return [moveit_py_node]

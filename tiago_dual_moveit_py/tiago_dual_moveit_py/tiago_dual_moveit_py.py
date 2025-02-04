@@ -57,8 +57,8 @@ class TiagoDualPy(Node):
         self.groups['left_torso'] = self.tiago_dual.get_planning_component("arm_left_torso")
         self.groups['both_arms_torso'] = self.tiago_dual.get_planning_component("both_arms_torso")
 
-        self.gripper_links['right'] = 'arm_right_tool_link'
-        self.gripper_links['left'] = 'arm_left_tool_link'
+        self.gripper_links['right'] = 'gripper_right_grasping_frame'
+        self.gripper_links['left'] = 'gripper_left_grasping_frame'
         #ADD GRIPPER GROUPS
         self.logger.info("MoveItPy instance created")
 
@@ -203,8 +203,7 @@ class TiagoDualPy(Node):
         both_arms_torso.set_goal_state(robot_state=robot_state)
         return self.plan_and_execute(self.tiago_dual, both_arms_torso, self.logger, vel_factor=vel_factor, sleep_time=sleep_time)
 
-
-        
+    
 
     def arm_go_to_pose(self, arm: str, pose: PoseStamped, vel_factor=0.2, sleep_time=0.1):
         if arm=='left' or arm=='right':

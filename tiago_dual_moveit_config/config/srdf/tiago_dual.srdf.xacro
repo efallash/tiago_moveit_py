@@ -60,6 +60,46 @@
         <group name="arm_${side}" />
         <group name="torso" />
     </group>
+
+    <group_state name="pre-give" group="arm_${side}">
+        <joint name="arm_${side}_1_joint" value="0.6981317008"/>
+        <joint name="arm_${side}_2_joint" value="0.0"/>
+        <joint name="arm_${side}_3_joint" value="1.483529864"/>
+        <joint name="arm_${side}_4_joint" value="1.570796327"/>
+        <joint name="arm_${side}_5_joint" value="-1.658062789"/>
+        <joint name="arm_${side}_6_joint" value="0.872664626"/>
+        <joint name="arm_${side}_7_joint" value="-1.483529864"/>
+    </group_state>
+
+    <group_state name="pre-collect" group="arm_${side}">
+        <joint name="arm_${side}_1_joint" value="0.6981317008"/>
+        <joint name="arm_${side}_2_joint" value="0.0"/>
+        <joint name="arm_${side}_3_joint" value="1.483529864"/>
+        <joint name="arm_${side}_4_joint" value="1.570796327"/>
+        <joint name="arm_${side}_5_joint" value="-1.658062789"/>
+        <joint name="arm_${side}_6_joint" value="0.872664626"/>
+        <joint name="arm_${side}_7_joint" value="0.0"/>
+    </group_state>
+
+    <group_state name="give" group="arm_${side}">
+        <joint name="arm_${side}_1_joint" value="0.837758041"/>
+        <joint name="arm_${side}_2_joint" value="0.0"/>
+        <joint name="arm_${side}_3_joint" value="1.483529864"/>
+        <joint name="arm_${side}_4_joint" value="1.570796327"/>
+        <joint name="arm_${side}_5_joint" value="-1.658062789"/>
+        <joint name="arm_${side}_6_joint" value="0.7679448709"/>
+        <joint name="arm_${side}_7_joint" value="-1.483529864"/>
+    </group_state>
+
+    <group_state name="collect" group="arm_${side}">
+        <joint name="arm_${side}_1_joint" value="0.837758041"/>
+        <joint name="arm_${side}_2_joint" value="0.0"/>
+        <joint name="arm_${side}_3_joint" value="1.483529864"/>
+        <joint name="arm_${side}_4_joint" value="1.570796327"/>
+        <joint name="arm_${side}_5_joint" value="-1.658062789"/>
+        <joint name="arm_${side}_6_joint" value="0.7679448709"/>
+        <joint name="arm_${side}_7_joint" value="0.0"/>
+    </group_state>
 </xacro:macro>
 
 <xacro:if value="${has_arm_left}">
