@@ -158,7 +158,7 @@ class TiagoDualCommander(TiagoDualPy):
         target_pose.pose.position.z = request.z
         roll=0
         pitch=1.5708
-        yaw=0
+        yaw=request.yaw
         orient = quaternion_from_euler(roll, pitch, yaw)
         self.logger.info(f"euler: (r: {roll}, p: {pitch}, y: {yaw})")
         self.logger.info(f"orientation: {orient}")

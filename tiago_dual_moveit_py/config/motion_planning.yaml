@@ -5,7 +5,7 @@ planning_scene_monitor_options:
   attached_collision_object_topic: "/moveit_cpp/planning_scene_monitor"
   publish_planning_scene_topic: "/moveit_cpp/publish_planning_scene"
   monitored_planning_scene_topic: "/moveit_cpp/monitored_planning_scene"
-  wait_for_initial_state_timeout: 10.0
+  wait_for_initial_state_timeout: 60.0
 
 planning_pipelines:
   pipeline_names: ["ompl"]
@@ -13,7 +13,7 @@ planning_pipelines:
 plan_request_params:
   planning_attempts: 5
   planning_pipeline: ompl
-  planning_time: 1.0
+  planning_time: 2.0
   planner_id: 'ompl'
   max_velocity_scaling_factor: 1.0
   max_acceleration_scaling_factor: 1.0
