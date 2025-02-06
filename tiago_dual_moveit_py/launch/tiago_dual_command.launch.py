@@ -146,7 +146,7 @@ def start_move_group(context, *args, **kwargs):
     ]
 
     moveit_py_node = Node(
-        name="tiago_dual_moveit_py_test",
+        name="tiago_dual_commander",
         package="tiago_dual_moveit_py",
         executable="tiago_dual_commander",
         output="both",

@@ -12,16 +12,21 @@ import rclpy
 from rclpy.logging import get_logger
 from rclpy.node import Node
 from rclpy.action import ActionClient
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 
 # moveit python library
-from moveit.core.robot_state import RobotState
+from moveit_msgs.srv import GetCartesianPath
+from moveit_msgs.msg import RobotTrajectory as RobotTrajectoryMsg
+from moveit.core.robot_state import RobotState, robotStateToRobotStateMsg
 from moveit.core.robot_model import RobotModel
 from moveit.core.robot_trajectory import RobotTrajectory
 from moveit.core.kinematic_constraints import construct_joint_constraint
+from moveit.core.planning_interface import MotionPlanResponse
 from moveit.planning import (
     MoveItPy,
     PlanningComponent,
-    TrajectoryExecutionManager
+    TrajectoryExecutionManager, 
+    PlanningSceneMonitor
 )
 
 
@@ -36,30 +41,44 @@ class TiagoDualPy(Node):
     def __init__(self, name='moveit_py'):
         super().__init__(name)
         self.logger = get_logger(f'tiago_dual.{name}')
+        #Create callback groups
+        self.cb_client = MutuallyExclusiveCallbackGroup()
+        self.cb_internal_client = MutuallyExclusiveCallbackGroup()
+        self.cb_server = MutuallyExclusiveCallbackGroup()
+
         # instantiate MoveItPy instance and get planning component
         self.tiago_dual = MoveItPy(node_name=name)
         trajectory_execution = self.tiago_dual.get_trajectory_execution_manager()
+        self.robot_model = self.tiago_dual.get_robot_model()
+        self.planning_monitor=self.tiago_dual.get_planning_scene_monitor()
+        assert isinstance(self.robot_model, RobotModel)
+        assert isinstance(self.planning_monitor, PlanningSceneMonitor)
         assert isinstance(trajectory_execution, TrajectoryExecutionManager)
         trajectory_execution.enable_execution_duration_monitoring(True)
         trajectory_execution.set_allowed_execution_duration_scaling(1.2)
         trajectory_execution.set_allowed_start_tolerance(0.05)
 
+        #Service clients for the cartesian path planning and execution
+        self.cartesian_plan_client = self.create_client(GetCartesianPath, '/compute_cartesian_path', callback_group=self.cb_internal_client)
+
         # Create objects for the arms and grippers
         self.groups = {}
         self.gripper_links = {}
         self.grippers = {}
-        self.gripper_goal_msgs = {}
 
-        # Populate arms and grippers #TODO: Add support for controlling both arms in a single group
+        # Populate arms and grippers
         self.groups['right'] = self.tiago_dual.get_planning_component("arm_right")
         self.groups['left'] = self.tiago_dual.get_planning_component("arm_left")
         self.groups['right_torso'] = self.tiago_dual.get_planning_component("arm_right_torso")
         self.groups['left_torso'] = self.tiago_dual.get_planning_component("arm_left_torso")
         self.groups['both_arms_torso'] = self.tiago_dual.get_planning_component("both_arms_torso")
-
+        self.grippers["left"] = ActionClient(
+            self, FollowJointTrajectory, "/gripper_left_controller/follow_joint_trajectory", callback_group=self.cb_client)
+        self.grippers["right"] = ActionClient(
+            self, FollowJointTrajectory, "/gripper_right_controller/follow_joint_trajectory", callback_group=self.cb_client)
         self.gripper_links['right'] = 'gripper_right_grasping_frame'
         self.gripper_links['left'] = 'gripper_left_grasping_frame'
-        #ADD GRIPPER GROUPS
+
         self.logger.info("MoveItPy instance created")
 
     def get_joint_states(self, topic):
@@ -135,21 +154,26 @@ class TiagoDualPy(Node):
     def gripper_action(self, arm, point:JointTrajectoryPoint, vel_factor, sleep_time):
         if arm == 'left' or arm == 'right':
             msg = FollowJointTrajectory.Goal()
-            action_name = f"/gripper_{arm}_controller/follow_joint_trajectory"
-            action_client = ActionClient(self, FollowJointTrajectory, action_name)
+            action_client = self.grippers[arm]
         else:
             self.logger.error('Wrong Arm Selected: Arm must be "left" or "right".')
             return False
         
-        joint_states = self.get_joint_states(f"/gripper_{arm}_controller/controller_state")
+        with self.planning_monitor.read_write() as scene:
+            current_state = scene.current_state
+            assert isinstance(current_state, RobotState)
+            current_state.update(True)
+            joint_positions=current_state.get_joint_group_positions(f"gripper_{arm}")
+
         joint_goals = list(point.positions)
-        distances = [abs(joint_states[f"gripper_{arm}_right_finger_joint"]-joint_goals[0]),abs(joint_states[f"gripper_{arm}_left_finger_joint"]-joint_goals[1])]
+        distances = [abs(joint_positions[0]-joint_goals[0]),abs(joint_positions[1]-joint_goals[1])]
         duration = (max(distances)/vel_factor)*2
         point.time_from_start.sec = int(duration)
         
         point.time_from_start.nanosec = int((duration - int(duration)) * 1e9)
         msg.trajectory.joint_names = [f"gripper_{arm}_right_finger_joint", f"gripper_{arm}_left_finger_joint"]
         msg.trajectory.points = [point]
+        self.logger.debug(f"DEBUG - Sending goal {point} with duration {duration}")
         future = action_client.send_goal_async(msg)
         time.sleep(duration + sleep_time)
         return future
@@ -168,36 +192,22 @@ class TiagoDualPy(Node):
     
     def dual_arm_go_to_pose(self, pose_right: PoseStamped, pose_left: PoseStamped, torso_constraint, vel_factor=0.2, sleep_time=0.1):
         both_arms_torso=self.groups["both_arms_torso"]
-        robot_model = self.tiago_dual.get_robot_model()
-        planning_monitor=self.tiago_dual.get_planning_scene_monitor()
         assert isinstance(both_arms_torso, PlanningComponent)
-
         
-        with planning_monitor.read_write() as scene:
+        with self.planning_monitor.read_write() as scene:
             current_state = scene.current_state
             assert isinstance(current_state, RobotState)
-            robot_state = RobotState(robot_model) 
+            robot_state = RobotState(self.robot_model) 
             current_state.update(True)
-        
-            #************************DEBUG*****************************************************
 
-            self.logger.info(f"Right: {current_state.get_pose('arm_right_tool_link')}")
-            self.logger.info(f"Left: {current_state.get_pose('arm_left_tool_link')}")
-            self.logger.info(f"Torso: {current_state.get_joint_group_positions('torso')[0]}")
-             
             robot_state.set_joint_group_positions("torso", [torso_constraint])
             robot_state.update(True)
+
             self.logger.info("Planning right arm")
             robot_state.set_from_ik("arm_right", pose_right.pose, self.gripper_links["right"], 1.0)
             self.logger.info("Planning left arm")
             robot_state.set_from_ik("arm_left", pose_left.pose, self.gripper_links["left"], 1.0)
             robot_state.update(True) 
-
-            #************************DEBUG*****************************************************
-            self.logger.info(f"Right: {robot_state.get_pose('arm_right_tool_link')}")
-            self.logger.info(f"Left: {robot_state.get_pose('arm_left_tool_link')}")
-            self.logger.info(f"Torso: {robot_state.get_joint_group_positions('torso')[0]}")
-            
         
         both_arms_torso.set_start_state_to_current_state()
         both_arms_torso.set_goal_state(robot_state=robot_state)
@@ -218,7 +228,59 @@ class TiagoDualPy(Node):
         angles=euler_from_quaternion([pose.pose.orientation.x, pose.pose.orientation.y, pose.pose.orientation.z, pose.pose.orientation.w])
         self.logger.info(f'Moving to pose x: {pose.pose.position.x} y: {pose.pose.position.y} z: {pose.pose.position.z} r: {angles[0]} p: {angles[1]} y: {angles[2]}')
         return self.plan_and_execute(self.tiago_dual, selected_arm, self.logger, vel_factor=vel_factor, sleep_time=sleep_time)
+    
+    async def arm_go_to_pose_cartesian(self, arm: str, pose: PoseStamped, vel_factor=0.2, sleep_time=0.1):
+        self.logger.info('Planning and executing cartesian path')
+        plan_result, robot_trajectory =await self.cartesian_plan(arm, pose)
+        if plan_result:
+            if vel_factor>0:
+                execute_result=self.execute(self.tiago_dual, self.logger, trajectory=robot_trajectory, vel_factor=vel_factor, sleep_time=sleep_time)
 
+                if execute_result.status=='SUCCEEDED':
+                    self.logger.info(f'EXECUTION SUCCEEDED')
+                    return (True, execute_result.status)
+                else:
+                    self.logger.error(f'EXECUTION FAILED, code: {execute_result.status}')
+                    return (False, execute_result.status)
+            else:
+                self.logger.info('Planning Suceeded')
+                return (True, 'PLAN_SUCEEDED')
+        else:
+            self.logger.error('Planning failed')
+            return (False, 'PLAN_FAILED')
+
+    async def cartesian_plan(self, arm:str, pose:PoseStamped):
+        if arm=='left' or arm=='right':
+            selected_arm=self.groups[arm].planning_group_name
+            gripper_link=self.gripper_links[arm]
+        else:
+            self.logger.error('Wrong Arm Selected: Arm must be "left" or "right".')
+            return False
+        #Define request message
+        request = GetCartesianPath.Request()
+        request.header.stamp = self.get_clock().now().to_msg()
+        request.header.frame_id = pose.header.frame_id
+        request.link_name = gripper_link
+        request.group_name = selected_arm
+        request.max_step = 0.01
+        request.jump_threshold = 0.0
+        request.avoid_collisions = True
+
+        #Obtain pose from MoveIt scene
+        with self.planning_monitor.read_write() as scene:
+            current_state = scene.current_state
+            assert isinstance(current_state, RobotState)
+            current_state.update(True)
+            start_pose=current_state.get_pose(gripper_link)
+        request.start_state = robotStateToRobotStateMsg(current_state)
+        request.waypoints=[start_pose, pose.pose]
+        response= await self.cartesian_plan_client.call_async(request)
+        assert isinstance(response, GetCartesianPath.Response)
+        plan_result = True if response.fraction>0.9 else False
+        robot_trajectory=RobotTrajectory(self.robot_model)
+        robot_trajectory.set_robot_trajectory_msg(current_state, response.solution)
+        robot_trajectory.joint_model_group_name=selected_arm
+        return plan_result, robot_trajectory
 
     def plan(self,
         planning_component: PlanningComponent,
@@ -244,13 +306,19 @@ class TiagoDualPy(Node):
     def execute(self,
         robot: MoveItPy,
         logger,
-        plan_result,
+        plan_result=None,
+        trajectory=None,
         vel_factor=1,
         sleep_time=0.0        
         ):
         # execute the plan
         logger.info("Executing plan")
-        robot_trajectory = plan_result.trajectory
+        if plan_result:
+            robot_trajectory = plan_result.trajectory
+        elif trajectory:
+            robot_trajectory = trajectory
+        else:
+            raise RuntimeError("Provide a motion planning result or a robot trajectory")
         assert isinstance(robot_trajectory, RobotTrajectory)
         robot_trajectory.apply_totg_time_parameterization(vel_factor, 1.0)
         result=robot.execute(robot_trajectory, controllers=[])
@@ -272,7 +340,7 @@ class TiagoDualPy(Node):
 
         if plan_result:
             if vel_factor>0:
-                execute_result=self.execute(robot,logger,plan_result, vel_factor, sleep_time)
+                execute_result=self.execute(robot,logger, plan_result=plan_result, vel_factor=vel_factor, sleep_time=sleep_time)
 
                 if execute_result.status=='SUCCEEDED':
                     logger.info(f'EXECUTION SUCCEEDED')

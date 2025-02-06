@@ -4,6 +4,7 @@ float32 y
 float32 z 
 float32 yaw #Orientation of the gripper (Radians)
 float32 vel #Between 1 and 0. Use 1 for max velocity. Use 0 for planning only
+bool cartesian #Whether to use cartesian planning
 string named_pose #Use to override position and go to a named pose. E.g., "home"
 ---
 bool success
