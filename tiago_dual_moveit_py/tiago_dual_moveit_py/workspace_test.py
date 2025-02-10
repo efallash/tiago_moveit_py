@@ -86,28 +86,30 @@ class WorkspaceReachExperiment(Node):
         home_req.vel = vel_exec
         home_req.cartesian = False
         future = self.arm_clients[arm].call_async(home_req)
-        rclpy.spin_until_future_complete(self, future)
-        if future.result() is None:
-            self.get_logger().error("Failed to home the arm!")
-        else:
+        success, status_msg = self.wait_execution_result(future)
+        if success:
             self.get_logger().info("Arm homed successfully.")
 
+        else:
+            self.get_logger().error(f"Failed to home the arm! Status: {status_msg}")
+            
         # Send the other arm to a position where it does not get in the way
         self.get_logger().info("Sending other arm to far position...")
+        other_arm= "left" if arm=="right" else "right"
         home_req = ArmControl.Request()
         home_req.x = -0.5
-        home_req.y = 0.5 if arm=="left" else -0.5
-        home_req.z = 0.6
+        home_req.y = 0.5 if other_arm=="left" else -0.5
+        home_req.z = 0.3
         home_req.yaw = 0.0
         home_req.vel = vel_exec
         home_req.cartesian = False
-        other_arm= "left" if arm=="right" else "right"
         future = self.arm_clients[other_arm].call_async(home_req)
-        rclpy.spin_until_future_complete(self, future)
-        if future.result() is None:
-            self.get_logger().error("Failed to move the other arm!")
-        else:
+        success, status_msg = self.wait_execution_result(future)
+        if success:
             self.get_logger().info("Other arm homed successfully.")
+
+        else:
+            self.get_logger().error(f"Failed to home the other arm! Status: {status_msg}")
 
 
         
@@ -128,19 +130,11 @@ class WorkspaceReachExperiment(Node):
             
             # Call the service and wait for the result.
             future = self.arm_clients[arm].call_async(req)
-            rclpy.spin_until_future_complete(self, future)
-            response = future.result()
-            
-            # Check for planning (and execution) success.
-            if response is not None:
-                plan_success = response.success 
-                exec_success = response.status  
-            else:
-                plan_success = False
-                exec_success = ""
+            success, status_msg = self.wait_execution_result(future)
             
             # If planning was successful, try to get the reached pose via tf2.
-            if plan_success:
+            if success:
+                self.get_logger().info("Pose reached successfully.")
                 try:
                     now = rclpy.time.Time()
                     trans = self.tf_buffer.lookup_transform('base_footprint', self.end_effector[arm], now, timeout=rclpy.duration.Duration(seconds=1.0))
@@ -154,6 +148,7 @@ class WorkspaceReachExperiment(Node):
                     reached_x, reached_y, reached_z = 0.0, 0.0, 0.0
                     error = -1.0
             else:
+                self.get_logger().info(f"Pose failed. Status: {status_msg}")
                 reached_x = reached_y = reached_z = 0.0
                 error = -1.0
             
@@ -163,8 +158,8 @@ class WorkspaceReachExperiment(Node):
                 "y_set": y,
                 "z_set": z,
                 "yaw_set": yaw,
-                "plan_success": plan_success,
-                "exec_success": exec_success,
+                "success": success,
+                "status": status_msg,
                 "x_final": reached_x,
                 "y_final": reached_y,
                 "z_final": reached_z,
@@ -181,11 +176,12 @@ class WorkspaceReachExperiment(Node):
         home_req.vel = vel_exec
         home_req.cartesian = False
         future = self.arm_clients[arm].call_async(home_req)
-        rclpy.spin_until_future_complete(self, future)
-        if future.result() is None:
-            self.get_logger().error("Failed to home the arm!")
-        else:
+        success, status_msg = self.wait_execution_result(future)
+        if success:
             self.get_logger().info("Arm homed successfully.")
+
+        else:
+            self.get_logger().error(f"Failed to home the arm! Status: {status_msg}")
 
         # Send the arm to a known “home” position first.
         self.get_logger().info("Sending arm to home position...")
@@ -197,11 +193,11 @@ class WorkspaceReachExperiment(Node):
         home_req.vel = vel_exec
         home_req.cartesian = False
         future = self.arm_clients[other_arm].call_async(home_req)
-        rclpy.spin_until_future_complete(self, future)
-        if future.result() is None:
-            self.get_logger().error("Failed to home the arm!")
+        if success:
+            self.get_logger().info("Other arm homed successfully.")
+
         else:
-            self.get_logger().info("Arm homed successfully.")
+            self.get_logger().error(f"Failed to home the other arm! Status: {status_msg}")
         
         # Save experiment results to a CSV file.
         results_df = pd.DataFrame(results)
@@ -209,10 +205,23 @@ class WorkspaceReachExperiment(Node):
         results_df.to_csv(output_file, index=False)
         self.get_logger().info(f"Experiment finished; results saved to {output_file}")
 
+    def wait_execution_result(self, future):
+            rclpy.spin_until_future_complete(self, future)
+            response = future.result()
+            
+            # Check for planning (and execution) success.
+            if response is not None:
+                success = response.success 
+                status_msg = response.status  
+            else:
+                plan_success = False
+                exec_success = ""
+            return success, status_msg
+
 def main(args=None):
     rclpy.init(args=args)
     node = WorkspaceReachExperiment()
-    x_limits=(0.3, 0.9, 5)
+    x_limits=(0.35, 0.9, 5)
     y_limits=(-0.2, 0.9, 5)
     z_limits=(0.3, 0.9, 5)
     yaw_limits=(-math.pi/2, math.pi/2, 5)

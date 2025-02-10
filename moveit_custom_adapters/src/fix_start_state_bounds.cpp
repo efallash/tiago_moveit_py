@@ -62,7 +62,7 @@ namespace custom_planning_request_adapters
 class FixStartStateBounds : public planning_interface::PlanningRequestAdapter
 {
 public:
-  FixStartStateBounds() : logger_(moveit::getLogger("moveit.ros.check_start_state_bounds"))
+  FixStartStateBounds() : logger_(moveit::getLogger("moveit.ros.fix_start_state_bounds"))
   {
   }
 
@@ -108,12 +108,53 @@ public:
       {
         case moveit::core::JointModel::REVOLUTE:
         {
-          double initial = start_state.getJointPositions(jmodel)[0];
-          start_state.enforceBounds(jmodel);
-          double after = start_state.getJointPositions(jmodel)[0];
-          if (fabs(initial - after) > std::numeric_limits<double>::epsilon())
+          // Check the joint against its bounds.
+          //If joint is continuous, fix state start
+          if (static_cast<const moveit::core::RevoluteJointModel*>(jmodel)->isContinuous())
+          {
+            double initial = start_state.getJointPositions(jmodel)[0];
+            start_state.enforceBounds(jmodel);
+            double after = start_state.getJointPositions(jmodel)[0];
+            if (fabs(initial - after) > std::numeric_limits<double>::epsilon())
+            {
+              should_fix_state |= true;
+            }
+          }
+          //If joint is not continuous, check if error is within bounds
+          else if (!start_state.satisfiesBounds(jmodel))
           {
             should_fix_state |= true;
+            if (start_state.satisfiesBounds(jmodel, params.start_state_max_bounds_error))
+            {
+              start_state.enforceBounds(jmodel);
+              fixed_start_state |= true;
+            }
+
+            else{
+              is_out_of_bounds |= true;
+
+              std::stringstream allowed_deviation;
+              std::stringstream joint_values;
+              std::stringstream joint_bounds_low;
+              std::stringstream joint_bounds_hi;
+              allowed_deviation << params.start_state_max_bounds_error << ' ';
+              const double* p = start_state.getJointPositions(jmodel);
+              for (std::size_t k = 0; k < jmodel->getVariableCount(); ++k)
+              {
+                joint_values << p[k]  << ' ';
+              }
+              const moveit::core::JointModel::Bounds& b = jmodel->getVariableBounds();
+              for (const moveit::core::VariableBounds& variable_bounds : b)
+              {
+                joint_bounds_low << variable_bounds.min_position_ << ' ';
+                joint_bounds_hi << variable_bounds.max_position_ << ' ';
+              }
+              RCLCPP_ERROR(logger_,
+                          "Joint '%s' from the starting state is outside bounds by more than allowed deviation (%s) : [%s] should be in "
+                          "the range [%s], [%s].",
+                          jmodel->getName().c_str(), allowed_deviation.str().c_str(), joint_values.str().c_str(), joint_bounds_low.str().c_str(),
+                          joint_bounds_hi.str().c_str());
+            }
           }
           
 
@@ -148,42 +189,6 @@ public:
           break;  // do nothing
         }
       }
-
-      // Check the joint against its bounds.
-      if (!start_state.satisfiesBounds(jmodel))
-      {
-
-        if (start_state.satisfiesBounds(jmodel, params.start_state_max_bounds_error))
-        {
-          fixed_start_state |= true;
-        }
-
-        else{
-          is_out_of_bounds |= true;
-
-          std::stringstream allowed_deviation;
-          std::stringstream joint_values;
-          std::stringstream joint_bounds_low;
-          std::stringstream joint_bounds_hi;
-          allowed_deviation << params.start_state_max_bounds_error << ' ';
-          const double* p = start_state.getJointPositions(jmodel);
-          for (std::size_t k = 0; k < jmodel->getVariableCount(); ++k)
-          {
-            joint_values << p[k]  << ' ';
-          }
-          const moveit::core::JointModel::Bounds& b = jmodel->getVariableBounds();
-          for (const moveit::core::VariableBounds& variable_bounds : b)
-          {
-            joint_bounds_low << variable_bounds.min_position_ << ' ';
-            joint_bounds_hi << variable_bounds.max_position_ << ' ';
-          }
-          RCLCPP_ERROR(logger_,
-                      "Joint '%s' from the starting state is outside bounds by more than allowed deviation (%s) : [%s] should be in "
-                      "the range [%s], [%s].",
-                      jmodel->getName().c_str(), allowed_deviation.str().c_str(), joint_values.str().c_str(), joint_bounds_low.str().c_str(),
-                      joint_bounds_hi.str().c_str());
-        }
-      }
     }
 
     // Package up the adapter result, changing the state if applicable.
@@ -191,7 +196,12 @@ public:
     status.source = getDescription();
     status.val = moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
 
-    RCLCPP_INFO(logger_, "Fix start state enable: %i Out of bounds: %i  Should fix state: %i Fixed start state: %i")
+    RCLCPP_INFO(logger_, "Fix start state enable: %i Out of bounds: %i  Should fix state: %i Fixed start state: %i",
+                params.fix_start_state,
+                is_out_of_bounds, 
+                should_fix_state,
+                fixed_start_state
+                );
 
     if (is_out_of_bounds || (!params.fix_start_state && should_fix_state))
     {

@@ -26,7 +26,7 @@ setup(
         'console_scripts': [
             'tiago_dual_moveit_py = tiago_dual_moveit_py.tiago_dual_moveit_py:main',
             'tiago_dual_commander = tiago_dual_moveit_py.tiago_dual_command_services:main',
-            'prueba = tiago_dual_moveit_py.prueba:main'
+            'workspace_test = tiago_dual_moveit_py.workspace_test:main'
         ],
     },
 )
