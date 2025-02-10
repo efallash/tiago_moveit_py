@@ -1,0 +1,9 @@
+<library path="moveit_custom_adapters">
+  <class name="custom_planning_request_adapters/FixStartStateBounds"
+         type="custom_planning_request_adapters::FixStartStateBounds"
+         base_class_type="planning_interface::PlanningRequestAdapter">
+    <description>
+      Fixes the start state to be within the joint limits specified in the URDF.
+    </description>
+  </class>
+</library>
