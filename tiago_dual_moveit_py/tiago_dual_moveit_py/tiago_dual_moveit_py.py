@@ -72,6 +72,7 @@ class TiagoDualPy(Node):
         self.groups['right_torso'] = self.tiago_dual.get_planning_component("arm_right_torso")
         self.groups['left_torso'] = self.tiago_dual.get_planning_component("arm_left_torso")
         self.groups['both_arms_torso'] = self.tiago_dual.get_planning_component("both_arms_torso")
+        self.groups['torso'] = self.tiago_dual.get_planning_component("torso")
         self.grippers["left"] = ActionClient(
             self, FollowJointTrajectory, "/gripper_left_controller/follow_joint_trajectory", callback_group=self.cb_client)
         self.grippers["right"] = ActionClient(
@@ -213,8 +214,6 @@ class TiagoDualPy(Node):
         both_arms_torso.set_goal_state(robot_state=robot_state)
         return self.plan_and_execute(self.tiago_dual, both_arms_torso, self.logger, vel_factor=vel_factor, sleep_time=sleep_time)
 
-    
-
     def arm_go_to_pose(self, arm: str, pose: PoseStamped, vel_factor=0.2, sleep_time=0.1):
         if arm=='left' or arm=='right':
             selected_arm=self.groups[arm]
@@ -228,6 +227,16 @@ class TiagoDualPy(Node):
         angles=euler_from_quaternion([pose.pose.orientation.x, pose.pose.orientation.y, pose.pose.orientation.z, pose.pose.orientation.w])
         self.logger.info(f'Moving to pose x: {pose.pose.position.x} y: {pose.pose.position.y} z: {pose.pose.position.z} r: {angles[0]} p: {angles[1]} y: {angles[2]}')
         return self.plan_and_execute(self.tiago_dual, selected_arm, self.logger, vel_factor=vel_factor, sleep_time=sleep_time)
+    
+    def torso_go_to_position(self, position: float, vel_factor=0.2, sleep_time=0.1):
+        torso=self.groups["torso"]
+        assert isinstance(torso, PlanningComponent)
+        robot_state = RobotState(self.robot_model) 
+        robot_state.set_joint_group_positions("torso", [position])
+        robot_state.update(True)
+        torso.set_goal_state(robot_state=robot_state)
+        self.logger.info(f"Moving torso to position: {position} m")
+        return self.plan_and_execute(self.tiago_dual, torso, self.logger, vel_factor=vel_factor, sleep_time=sleep_time)
     
     async def arm_go_to_pose_cartesian(self, arm: str, pose: PoseStamped, vel_factor=0.2, sleep_time=0.1):
         self.logger.info('Planning and executing cartesian path')

@@ -1,0 +1,7 @@
+#Service message to control an arm to a position in the xyz space
+float32 position    
+float32 vel #Between 1 and 0. Use 1 for max velocity. Use 0 for planning only
+---
+bool success
+string status 
+

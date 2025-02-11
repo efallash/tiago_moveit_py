@@ -23,16 +23,20 @@ from geometry_msgs.msg import Pose, Point, Quaternion
 import tf2_ros
 
 # Import the ArmControl service.
-from tiago_moveit_py_interfaces.srv import ArmControl  # adjust as needed
+from tiago_moveit_py_interfaces.srv import ArmControl, GripperControl, TorsoControl
 
 class WorkspaceReachExperiment(Node):
     def __init__(self):
         super().__init__('workspace_reach_experiment')
         
         # Create a client for the arm control service.
-        self.arm_clients={}
+        self.arm_clients = {}
+        self.gripper_clients = {}
         self.arm_clients["left"] = self.create_client(ArmControl, "tiago_dual/left_arm_command")
         self.arm_clients["right"] = self.create_client(ArmControl, "tiago_dual/right_arm_command")
+        self.gripper_clients["left"] = self.create_client(GripperControl, "tiago_dual/left_gripper_command")
+        self.gripper_clients["right"] = self.create_client(GripperControl, "tiago_dual/right_gripper_command")
+        self.torso_client = self.create_client(TorsoControl, "tiago_dual/torso_command")
         self.end_effector={}
         self.end_effector["left"] = "gripper_left_grasping_frame" 
         self.end_effector["right"] = "gripper_right_grasping_frame"
@@ -75,7 +79,20 @@ class WorkspaceReachExperiment(Node):
         np.random.shuffle(poses)
         
         results = []
-        
+
+        #Open grippers
+        gripper_msg=GripperControl.Request()
+        gripper_msg.close = False
+        torso_msg=TorsoControl.Request()
+        torso_msg.position = 0.2
+        torso_msg.vel = 0.4
+        future1 = self.gripper_clients["left"].call_async(gripper_msg)
+        self.wait_execution_result(future1)
+        future2 = self.gripper_clients["right"].call_async(gripper_msg)
+        self.wait_execution_result(future2)
+        future3 = self.torso_client.call_async(torso_msg)
+        self.wait_execution_result(future3)
+     
         # Send the arm to a known “home” position first.
         self.get_logger().info("Sending arm to home position...")
         home_req = ArmControl.Request()
@@ -187,7 +204,7 @@ class WorkspaceReachExperiment(Node):
         self.get_logger().info("Sending arm to home position...")
         home_req = ArmControl.Request()
         home_req.x = 0.3
-        home_req.y = 0.3 if arm=="left" else -0.3
+        home_req.y = 0.3 if other_arm=="left" else -0.3
         home_req.z = 0.6
         home_req.yaw = 0.0
         home_req.vel = vel_exec
@@ -211,22 +228,25 @@ class WorkspaceReachExperiment(Node):
             
             # Check for planning (and execution) success.
             if response is not None:
-                success = response.success 
-                status_msg = response.status  
+                success = response.success
+                if getattr(response, "status", None): 
+                    status_msg = response.status
+                else:
+                    status_msg = ""  
             else:
-                plan_success = False
-                exec_success = ""
+                success = False
+                status_msg = ""
             return success, status_msg
 
 def main(args=None):
     rclpy.init(args=args)
     node = WorkspaceReachExperiment()
     x_limits=(0.35, 0.9, 5)
-    y_limits=(-0.2, 0.9, 5)
+    y_limits=(0.2, -0.9, 5)
     z_limits=(0.3, 0.9, 5)
-    yaw_limits=(-math.pi/2, math.pi/2, 5)
+    yaw_limits=(-math.pi/2, math.pi/2, 3)
     try:
-        node.run_experiment("left", x_limits, y_limits, z_limits, yaw_limits, vel_exec=0.4)
+        node.run_experiment("right", x_limits, y_limits, z_limits, yaw_limits, vel_exec=0.4)
     except Exception as e:
         node.get_logger().error(f"Experiment error: {e}")
     finally:

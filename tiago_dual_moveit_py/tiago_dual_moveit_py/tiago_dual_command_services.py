@@ -2,7 +2,7 @@ import rclpy
 import numpy as np
 
 from tiago_dual_moveit_py.tiago_dual_moveit_py import TiagoDualPy
-from tiago_moveit_py_interfaces.srv import ArmControl, GripperControl
+from tiago_moveit_py_interfaces.srv import ArmControl, GripperControl, TorsoControl
 from math import pi
 
 from tf_transformations import quaternion_from_euler
@@ -24,6 +24,9 @@ class TiagoDualCommander(TiagoDualPy):
         )
         self.srv_right_gripper = self.create_service(
             GripperControl, "tiago_dual/right_gripper_command", self.right_gripper_callback, callback_group=self.cb_server
+        )
+        self.srv_torso = self.create_service(
+            TorsoControl, "tiago_dual/torso_command", self.torso_callback, callback_group=self.cb_server
         )
         self.get_logger().info("Tiago Command Services are now available.")
 
@@ -62,6 +65,13 @@ class TiagoDualCommander(TiagoDualPy):
         self.get_logger().info("Right gripper command received")
         success = await self.gripper_control(request, "right")
         response.success = success
+        return response
+    
+    def torso_callback(self, request: TorsoControl.Request, response: TorsoControl.Response):
+        self.get_logger().info("Torso command received")
+        success, status = self.torso_go_to_position(request.position, vel_factor=request.vel)
+        response.success = success
+        response.status = status
         return response
 
     async def arm_command(self, request: ArmControl.Request, arm):
