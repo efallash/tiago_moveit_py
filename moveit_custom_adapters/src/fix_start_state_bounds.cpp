@@ -97,6 +97,7 @@ public:
     bool should_fix_state = false;
     bool is_out_of_bounds = false;
     bool fixed_start_state = false;
+    double start_state_max_bounds_error = 0.01;
     for (const moveit::core::JointModel* jmodel : jmodels)
     {
       // Check if we have a revolute, continuous joint. If we do, then we only need to make sure
@@ -124,7 +125,7 @@ public:
           else if (!start_state.satisfiesBounds(jmodel))
           {
             should_fix_state |= true;
-            if (start_state.satisfiesBounds(jmodel, params.start_state_max_bounds_error))
+            if (start_state.satisfiesBounds(jmodel, start_state_max_bounds_error))
             {
               start_state.enforceBounds(jmodel);
               fixed_start_state |= true;
@@ -137,7 +138,7 @@ public:
               std::stringstream joint_values;
               std::stringstream joint_bounds_low;
               std::stringstream joint_bounds_hi;
-              allowed_deviation << params.start_state_max_bounds_error << ' ';
+              allowed_deviation << start_state_max_bounds_error << ' ';
               const double* p = start_state.getJointPositions(jmodel);
               for (std::size_t k = 0; k < jmodel->getVariableCount(); ++k)
               {
