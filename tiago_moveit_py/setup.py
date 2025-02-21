@@ -24,7 +24,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'tiago_moveit_py = tiago_moveit_py.tiago_moveit_py:main'
+            'tiago_moveit_py = tiago_moveit_py.tiago_moveit_py:main',
+            'tiago_commander = tiago_moveit_py.tiago_command_services:main',
         ],
     },
 )
