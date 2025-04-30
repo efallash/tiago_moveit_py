@@ -30,12 +30,15 @@ from moveit.planning import (
 )
 
 
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, TransformStamped
 from control_msgs.action import FollowJointTrajectory
 import rclpy.task
 from trajectory_msgs.msg import JointTrajectoryPoint
 from control_msgs.msg import JointTrajectoryControllerState
-from tf_transformations import euler_from_quaternion
+from tf_transformations import euler_from_quaternion, quaternion_matrix
+from tf2_geometry_msgs import do_transform_pose
+from tf2_ros import Buffer, TransformListener
+from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 
 class TiagoDualPy(Node):
     def __init__(self, name='moveit_py'):
@@ -64,6 +67,7 @@ class TiagoDualPy(Node):
         # Create objects for the arms and grippers
         self.groups = {}
         self.gripper_links = {}
+        self.planning_links = {}
         self.grippers = {}
 
         # Populate arms and grippers
@@ -77,10 +81,102 @@ class TiagoDualPy(Node):
             self, FollowJointTrajectory, "/gripper_left_controller/follow_joint_trajectory", callback_group=self.cb_client)
         self.grippers["right"] = ActionClient(
             self, FollowJointTrajectory, "/gripper_right_controller/follow_joint_trajectory", callback_group=self.cb_client)
-        self.gripper_links['right'] = 'gripper_right_grasping_frame'
-        self.gripper_links['left'] = 'gripper_left_grasping_frame'
+        self.gripper_links['right'] = 'custom_gripper_right_grasping_frame'
+        self.gripper_links['left'] = 'custom_gripper_left_grasping_frame'
+        self.planning_links['right'] = 'gripper_right_grasping_frame'
+        self.planning_links['left'] = 'gripper_left_grasping_frame'
+
+        self.publish_grasping_frame()
+
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
 
         self.logger.info("MoveItPy instance created")
+
+    def publish_grasping_frame(self):
+        # Create a static transform broadcaster
+        self.tf_right_broadcaster = StaticTransformBroadcaster(self)
+        self.tf_left_broadcaster = StaticTransformBroadcaster(self)
+        # Create a static transform message
+        transform = TransformStamped()
+        transform.header.stamp = self.get_clock().now().to_msg()
+        transform.header.frame_id = "gripper_right_grasping_frame"
+        transform.child_frame_id = "custom_gripper_right_grasping_frame"
+        transform.transform.translation.x = 0.05
+        transform.transform.translation.y = 0.0
+        transform.transform.translation.z = 0.0
+        transform.transform.rotation.x = 0.0
+        transform.transform.rotation.y = 0.0
+        transform.transform.rotation.z = 0.0
+        transform.transform.rotation.w = 1.0
+
+        # Send the transformation
+        self.tf_right_broadcaster.sendTransform(transform)
+
+        transform.header.frame_id = "gripper_left_grasping_frame"
+        transform.child_frame_id = "custom_gripper_left_grasping_frame"
+
+        self.tf_left_broadcaster.sendTransform(transform)
+        self.logger.info("Grasping frames published")
+    
+    def transform_pose_to_planning_frame(self, pose: PoseStamped, arm: str) -> PoseStamped:
+        """Transform a pose defined for custom frame to be used with the actual planning frame
+
+        Note: The custom frame must have a static transform to the planning frame, AND, the same orientation.
+        
+        Using TF2's built-in pose transformation utilities.
+        
+        Args:
+            pose: The pose to transform
+            arm: 'left' or 'right' arm
+            
+        Returns:
+            The transformed pose for use with the planning frame
+        """
+        if arm not in ['left', 'right']:
+            self.logger.error('Wrong Arm Selected: Arm must be "left" or "right".')
+            return pose
+    
+        # Transform this identity pose to the base frame (typically base_footprint)
+        # This gives us the pose of the custom frame in the base frame
+        try:      
+            # Now get transform from planning to custom frame
+            planning_to_custom_transform = self.tf_buffer.lookup_transform(
+                self.gripper_links[arm],    # custom frame
+                self.planning_links[arm],   # planning frame
+                rclpy.time.Time(),
+                rclpy.duration.Duration(seconds=10.0)
+            )
+            
+            # Extract transformation components
+            dx = planning_to_custom_transform.transform.translation.x
+            dy = planning_to_custom_transform.transform.translation.y
+            dz = planning_to_custom_transform.transform.translation.z
+            
+            # Calculate the offset in the world frame based on the pose's orientation
+            q = [pose.pose.orientation.x, pose.pose.orientation.y, 
+                pose.pose.orientation.z, pose.pose.orientation.w]
+            rot_matrix = quaternion_matrix(q)
+            
+            # Apply rotation to the offset
+            offset = [dx, dy, dz, 1.0]
+            offset_in_world = rot_matrix.dot(offset)
+            
+            # Apply the offset to the original pose
+            adjusted_pose = PoseStamped()
+            adjusted_pose.header = pose.header
+            adjusted_pose.pose = pose.pose
+            adjusted_pose.pose.position.x += offset_in_world[0]
+            adjusted_pose.pose.position.y += offset_in_world[1]
+            adjusted_pose.pose.position.z += offset_in_world[2]
+            
+            self.logger.info(f"Transformed pose using TF2 with offset {[dx, dy, dz]}")
+            return adjusted_pose
+            
+        except Exception as e:
+            self.logger.error(f"TF Error: {e}")
+            # Return original pose if transformation fails
+            return None 
 
     def get_joint_states(self, topic):
         self.logger.info("Obtaining joint states...")
@@ -194,6 +290,11 @@ class TiagoDualPy(Node):
     def dual_arm_go_to_pose(self, pose_right: PoseStamped, pose_left: PoseStamped, torso_constraint, vel_factor=0.2, sleep_time=0.1):
         both_arms_torso=self.groups["both_arms_torso"]
         assert isinstance(both_arms_torso, PlanningComponent)
+        pose_right=self.transform_pose_to_planning_frame(pose_right, arm='right')
+        pose_left=self.transform_pose_to_planning_frame(pose_left, arm='left')
+
+        if pose_left is None or pose_right is None:
+            return (False, 'PLAN_FAILED')
         
         with self.planning_monitor.read_write() as scene:
             current_state = scene.current_state
@@ -205,9 +306,9 @@ class TiagoDualPy(Node):
             robot_state.update(True)
 
             self.logger.info("Planning right arm")
-            robot_state.set_from_ik("arm_right", pose_right.pose, self.gripper_links["right"], 1.0)
+            robot_state.set_from_ik("arm_right", pose_right.pose, self.planning_links["right"], 1.0)
             self.logger.info("Planning left arm")
-            robot_state.set_from_ik("arm_left", pose_left.pose, self.gripper_links["left"], 1.0)
+            robot_state.set_from_ik("arm_left", pose_left.pose, self.planning_links["left"], 1.0)
             robot_state.update(True) 
         
         both_arms_torso.set_start_state_to_current_state()
@@ -217,13 +318,14 @@ class TiagoDualPy(Node):
     def arm_go_to_pose(self, arm: str, pose: PoseStamped, vel_factor=0.2, sleep_time=0.1):
         if arm=='left' or arm=='right':
             selected_arm=self.groups[arm]
-            gripper_link=self.gripper_links[arm]
+            planning_link=self.planning_links[arm]
         else:
             self.logger.error('Wrong Arm Selected: Arm must be "left" or "right".')
-            return False
+            return (False, 'PLAN_FAILED')
+        pose=self.transform_pose_to_planning_frame(pose, arm=arm)
         assert isinstance(selected_arm, PlanningComponent)
         selected_arm.set_start_state_to_current_state()
-        selected_arm.set_goal_state(pose_stamped_msg=pose, pose_link=gripper_link)
+        selected_arm.set_goal_state(pose_stamped_msg=pose, pose_link=planning_link)
         angles=euler_from_quaternion([pose.pose.orientation.x, pose.pose.orientation.y, pose.pose.orientation.z, pose.pose.orientation.w])
         self.logger.info(f'Moving to pose x: {pose.pose.position.x} y: {pose.pose.position.y} z: {pose.pose.position.z} r: {angles[0]} p: {angles[1]} y: {angles[2]}')
         return self.plan_and_execute(self.tiago_dual, selected_arm, self.logger, vel_factor=vel_factor, sleep_time=sleep_time)
@@ -265,6 +367,7 @@ class TiagoDualPy(Node):
         else:
             self.logger.error('Wrong Arm Selected: Arm must be "left" or "right".')
             return False
+        pose=self.transform_pose_from_custom_frame(pose, arm=arm)
         #Define request message
         request = GetCartesianPath.Request()
         request.header.stamp = self.get_clock().now().to_msg()

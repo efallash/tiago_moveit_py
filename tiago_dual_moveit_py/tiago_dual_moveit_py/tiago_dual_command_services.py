@@ -3,7 +3,7 @@ import numpy as np
 
 from tiago_dual_moveit_py.tiago_dual_moveit_py import TiagoDualPy
 from tiago_moveit_py_interfaces.srv import ArmControl, GripperControl, TorsoControl
-from math import pi
+from math import pi, radians
 
 from tf_transformations import quaternion_from_euler
 from moveit.planning import PlanRequestParameters, PlanningComponent
@@ -103,21 +103,12 @@ class TiagoDualCommander(TiagoDualPy):
 
 
         # Define pose object
-        target_pose = PoseStamped()
-        target_pose.header.frame_id = "base_footprint"
-        target_pose.pose.position.x = request.x
-        target_pose.pose.position.y = request.y
-        target_pose.pose.position.z = request.z
-        roll=0
-        pitch=1.5708
-        yaw=request.yaw
-        orient = quaternion_from_euler(roll, pitch, yaw)
-        self.logger.info(f"euler: (r: {roll}, p: {pitch}, y: {yaw})")
-        self.logger.info(f"orientation: {orient}")
-        target_pose.pose.orientation.x = orient[0]
-        target_pose.pose.orientation.y = orient[1]
-        target_pose.pose.orientation.z = orient[2]
-        target_pose.pose.orientation.w = orient[3]
+        orient = self.obtain_orientation(arm, request)
+        if orient is None:
+            self.get_logger().error("Orientation not obtained")
+            return (False, 'PLAN_FAILED')
+        
+        target_pose = self.pose_to_msg(request, orient)
 
         if request.cartesian:
             success, status = await self.arm_go_to_pose_cartesian(arm, target_pose, request.vel)
@@ -125,6 +116,46 @@ class TiagoDualCommander(TiagoDualPy):
             success, status = self.arm_go_to_pose(arm, target_pose, request.vel)
 
         return (success, status)
+
+    def obtain_orientation(self, arm, request):
+        if request.grasp_pose:
+            roll = request.roll
+            pitch_list = np.linspace(radians(30), radians(60), 3)
+            if arm == "left":
+                yaw_list = np.linspace(radians(-90), radians(90), 10)
+            else:
+                yaw_list = np.linspace(radians(90), radians(-90), 10)
+            
+            for pitch in pitch_list:
+                for yaw in yaw_list:
+                    orient = quaternion_from_euler(yaw, pitch, roll, axes="rzyx")
+                    target_pose = self.pose_to_msg(request, orient)
+                    success, status = self.arm_go_to_pose(arm, target_pose, 0.0)
+                    if success:
+                        self.logger.info(f"euler: (r: {roll}, p: {pitch}, y: {yaw}, axes: rzyx)")
+                        self.logger.info(f"orientation: {orient}")
+                        return orient
+
+        else:
+            roll = request.roll
+            pitch = request.pitch
+            yaw = request.yaw
+            orient = quaternion_from_euler(yaw, pitch, roll, axes="rzyx")
+            self.logger.info(f"euler: (r: {roll}, p: {pitch}, y: {yaw}, axes: rzyx)")
+            self.logger.info(f"orientation: {orient}")
+            return orient
+    
+    def pose_to_msg(self, request, orient):
+        target_pose = PoseStamped()
+        target_pose.header.frame_id = "base_footprint"
+        target_pose.pose.position.x = request.x
+        target_pose.pose.position.y = request.y
+        target_pose.pose.position.z = request.z
+        target_pose.pose.orientation.x = orient[0]
+        target_pose.pose.orientation.y = orient[1]
+        target_pose.pose.orientation.z = orient[2]
+        target_pose.pose.orientation.w = orient[3]
+        return target_pose
     
     async def gripper_control(self, request: GripperControl.Request, arm):
         if request.close:

@@ -30,12 +30,13 @@ from moveit.planning import (
 )
 
 
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, TransformStamped
 from control_msgs.action import FollowJointTrajectory
 import rclpy.task
 from trajectory_msgs.msg import JointTrajectoryPoint
 from control_msgs.msg import JointTrajectoryControllerState
 from tf_transformations import euler_from_quaternion
+from tf2_ros.static_transform_broadcaster import StaticTransformBroadcaster
 
 class TiagoPy(Node):
     def __init__(self, name='moveit_py'):
@@ -72,6 +73,26 @@ class TiagoPy(Node):
         self.gripper_link = 'gripper_grasping_frame'
 
         self.logger.info("MoveItPy instance created")
+
+    def publish_grasping_frame(self):
+        # Create a static transform broadcaster
+        self.tf_broadcaster = StaticTransformBroadcaster(self)
+        # Create a static transform message
+        transform = TransformStamped()
+        transform.header.stamp = self.get_clock().now().to_msg()
+        transform.header.frame_id = "base_footprint"
+        transform.child_frame_id = "gripper_grasping_frame"
+        transform.transform.translation.x = 0.0
+        transform.transform.translation.y = 0.0
+        transform.transform.translation.z = 0.0
+        transform.transform.rotation.x = 0.0
+        transform.transform.rotation.y = 0.0
+        transform.transform.rotation.z = 0.0
+        transform.transform.rotation.w = 1.0
+
+        # Send the transformation
+        self.tf_broadcaster.sendTransform(transform)
+
 
     def get_joint_states(self, topic):
         self.logger.info("Obtaining joint states...")

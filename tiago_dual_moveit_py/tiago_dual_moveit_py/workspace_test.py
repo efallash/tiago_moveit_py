@@ -42,7 +42,7 @@ class WorkspaceReachExperiment(Node):
         self.end_effector["right"] = "gripper_right_grasping_frame"
         self.get_logger().info("Waiting for arm command service...")
         for client in self.arm_clients.values():
-            if not client.wait_for_service(timeout_sec=5.0):
+            if not client.wait_for_service(timeout_sec=20.0):
                 self.get_logger().error("Arm command service not available!")
                 rclpy.shutdown()
                 raise RuntimeError
@@ -51,29 +51,25 @@ class WorkspaceReachExperiment(Node):
         self.tf_buffer = tf2_ros.Buffer(cache_time=rclpy.duration.Duration(seconds=10))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         
-    def run_experiment(self, arm, x_limits, y_limits, z_limits, yaw_limits, vel_exec):
+    def run_experiment(self, arm, x_limits, y_limits, z_limits, vel_exec):
         # Define workspace boundaries (in meters) and resolution.
         # (Adjust these numbers for your specific robot and workspace.)
         x_min, x_max, x_divide = x_limits
         y_min, y_max, y_divide = y_limits
         z_min, z_max, z_divide = z_limits
         
-        # Define yaw limits (in radians) and resolution.
-        yaw_min, yaw_max, yaw_divide = yaw_limits
         
         # Generate arrays for x, y, z, and yaw.
         x_points = np.linspace(x_min, x_max, num=x_divide)
         y_points = np.linspace(y_min, y_max, num=y_divide)
         z_points = np.linspace(z_min, z_max, num=z_divide)
-        yaw_points = np.linspace(yaw_min, yaw_max, num=yaw_divide)
         
         # Build a list of target poses as [x, y, z, yaw]
         poses = []
         for x in x_points:
             for y in y_points:
                 for z in z_points:
-                    for yaw in yaw_points:
-                        poses.append([x, y, z, yaw])
+                    poses.append([x, y, z])
                         
         # Optionally, shuffle the list to avoid ordering bias.
         np.random.shuffle(poses)
@@ -99,7 +95,7 @@ class WorkspaceReachExperiment(Node):
         home_req.x = 0.3
         home_req.y = 0.3 if arm=="left" else -0.3
         home_req.z = 0.6
-        home_req.yaw = 0.0
+        home_req.pitch = 1.5708
         home_req.vel = vel_exec
         home_req.cartesian = False
         future = self.arm_clients[arm].call_async(home_req)
@@ -117,7 +113,7 @@ class WorkspaceReachExperiment(Node):
         home_req.x = -0.5
         home_req.y = 0.5 if other_arm=="left" else -0.5
         home_req.z = 0.3
-        home_req.yaw = 0.0
+        home_req.pitch = 1.5708
         home_req.vel = vel_exec
         home_req.cartesian = False
         future = self.arm_clients[other_arm].call_async(home_req)
@@ -133,15 +129,16 @@ class WorkspaceReachExperiment(Node):
         
         # Iterate over all target poses.
         for idx, target in enumerate(poses):
-            x, y, z, yaw = target
-            self.get_logger().info(f"[{idx+1}/{len(poses)}] Sending target: x={x:.3f}, y={y:.3f}, z={z:.3f}, yaw={yaw:.3f}")
+            x, y, z = target
+            self.get_logger().info(f"[{idx+1}/{len(poses)}] Sending target: x={x:.3f}, y={y:.3f}, z={z:.3f}")
             
             # Create and populate the service request.
             req = ArmControl.Request()
             req.x = x
             req.y = y
             req.z = z
-            req.yaw = yaw      # New field for yaw.
+            req.grasp_pose = True
+            #req.pitch = 1.5708 # Set a fixed pitch (adjust as needed).
             req.vel = vel_exec # Set a constant velocity (adjust as needed).
             req.cartesian = False      # Normal mode.
             
@@ -174,7 +171,6 @@ class WorkspaceReachExperiment(Node):
                 "x_set": x,
                 "y_set": y,
                 "z_set": z,
-                "yaw_set": yaw,
                 "success": success,
                 "status": status_msg,
                 "x_final": reached_x,
@@ -241,12 +237,11 @@ class WorkspaceReachExperiment(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = WorkspaceReachExperiment()
-    x_limits=(0.35, 0.9, 5)
-    y_limits=(0.2, -0.9, 5)
-    z_limits=(0.3, 0.9, 5)
-    yaw_limits=(-math.pi/2, math.pi/2, 3)
+    x_limits=(0.3, 0.9, 10)
+    y_limits=(0.2, -0.9, 10)
+    z_limits=(0.3, 1.0, 10)
     try:
-        node.run_experiment("right", x_limits, y_limits, z_limits, yaw_limits, vel_exec=0.4)
+        node.run_experiment("right", x_limits, y_limits, z_limits, vel_exec=0.4)
     except Exception as e:
         node.get_logger().error(f"Experiment error: {e}")
     finally:
