@@ -26,7 +26,8 @@ setup(
         'console_scripts': [
             'tiago_dual_moveit_py = tiago_dual_moveit_py.tiago_dual_moveit_py:main',
             'tiago_dual_commander = tiago_dual_moveit_py.tiago_dual_command_services:main',
-            'workspace_test = tiago_dual_moveit_py.workspace_test:main'
+            'workspace_test = tiago_dual_moveit_py.workspace_test:main',
+            'pick_and_place = tiago_dual_moveit_py.tiago_dual_actions:pick_and_place',
         ],
     },
 )

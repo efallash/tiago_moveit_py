@@ -363,16 +363,16 @@ class TiagoDualPy(Node):
     async def cartesian_plan(self, arm:str, pose:PoseStamped):
         if arm=='left' or arm=='right':
             selected_arm=self.groups[arm].planning_group_name
-            gripper_link=self.gripper_links[arm]
+            planning_link=self.planning_links[arm]
         else:
             self.logger.error('Wrong Arm Selected: Arm must be "left" or "right".')
             return False
-        pose=self.transform_pose_from_custom_frame(pose, arm=arm)
+        pose=self.transform_pose_to_planning_frame(pose, arm=arm)
         #Define request message
         request = GetCartesianPath.Request()
         request.header.stamp = self.get_clock().now().to_msg()
         request.header.frame_id = pose.header.frame_id
-        request.link_name = gripper_link
+        request.link_name = planning_link
         request.group_name = selected_arm
         request.max_step = 0.01
         request.jump_threshold = 0.0
@@ -383,7 +383,7 @@ class TiagoDualPy(Node):
             current_state = scene.current_state
             assert isinstance(current_state, RobotState)
             current_state.update(True)
-            start_pose=current_state.get_pose(gripper_link)
+            start_pose=current_state.get_pose(planning_link)
         request.start_state = robotStateToRobotStateMsg(current_state)
         request.waypoints=[start_pose, pose.pose]
         response= await self.cartesian_plan_client.call_async(request)

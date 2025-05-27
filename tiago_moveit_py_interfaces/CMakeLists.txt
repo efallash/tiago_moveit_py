@@ -19,6 +19,7 @@ set(srv_files
   "srv/GripperControl.srv"
   "srv/Perception.srv"
   "srv/TorsoControl.srv"
+  "srv/Trigger.srv"
 )
 
 rosidl_generate_interfaces(${PROJECT_NAME}
