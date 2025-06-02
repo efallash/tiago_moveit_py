@@ -5,6 +5,8 @@ from tiago_dual_moveit_py.tiago_dual_moveit_py import TiagoDualPy
 from tiago_moveit_py_interfaces.srv import ArmControl, GripperControl, TorsoControl
 from math import pi, radians
 
+from tiago_dual_moveit_py.service_client import ServiceClientAsync
+from tiago_moveit_py_interfaces.srv import GetActuator
 from tf_transformations import quaternion_from_euler
 from moveit.planning import PlanRequestParameters, PlanningComponent
 from geometry_msgs.msg import PoseStamped
@@ -28,8 +30,14 @@ class TiagoDualCommander(TiagoDualPy):
         self.srv_torso = self.create_service(
             TorsoControl, "tiago_dual/torso_command", self.torso_callback, callback_group=self.cb_server
         )
-        self.get_logger().info("Tiago Command Services are now available.")
 
+        self.actuator_client = ServiceClientAsync(
+            self, GetActuator, "tiago_dual/get_actuator_characteristic", callback_group=self.cb_client
+        )
+
+        self.gripper_relax_offset = 0.001 # Position offset for pressing the gripper fingers against an object
+
+        self.get_logger().info("Tiago Command Services are now available.")
 
     async def left_arm_callback(
         self, request: ArmControl.Request, response: ArmControl.Response
@@ -120,7 +128,7 @@ class TiagoDualCommander(TiagoDualPy):
     def obtain_orientation(self, arm, request):
         if request.grasp_pose:
             roll = request.roll
-            pitch_list = np.linspace(radians(30), radians(60), 3)
+            pitch_list = np.linspace(radians(45), radians(90), 3)
             if arm == "left":
                 yaw_list = np.linspace(radians(-90), radians(90), 10)
             else:
@@ -158,17 +166,100 @@ class TiagoDualCommander(TiagoDualPy):
         return target_pose
     
     async def gripper_control(self, request: GripperControl.Request, arm):
+        success = False
         if request.close:
-            future = self.close_gripper(arm)
+            self.logger.info(f"DEBUG: Grasp test requested for {arm} gripper")
+            # Try to close the gripper
+            closing_future = await self.move_gripper(arm, left_finger=0.0, right_finger=0.0, vel_factor=0.1)
+            result = await closing_future.get_result_async()
+
+            # Obtain the actuator values after the closing attempt
+            actuator_values = await self.get_gripper_actuator_values(arm)
+            right_finger_current = abs(actuator_values["right_current"])
+            left_finger_current = abs(actuator_values["left_current"])
+            right_finger_position = actuator_values["right_position"]
+            left_finger_position = actuator_values["left_position"]
+            relax_offset = self.gripper_relax_offset    
+
+            #Gripper is completely closed
+            if result.result.error_code == 0:
+                if right_finger_current < 0.1 and left_finger_current < 0.1:
+                    self.logger.info(f"No object detected by {arm} gripper")
+                    success = False
+                # High current means an small object is detected
+                else:
+                    self.logger.info(f"Object detected by {arm} gripper")
+                    # Relax the gripper so that it does not overheat
+                    right_relax_pos = max(right_finger_position - relax_offset, 0.0)
+                    left_relax_pos = max(left_finger_position - relax_offset, 0.0)
+                    relax_gripper_future = await self.move_gripper(arm, left_finger=left_relax_pos, right_finger=right_relax_pos, vel_factor=0.1)
+                    await relax_gripper_future.get_result_async()
+                    success = True
+            else:
+                if right_finger_position > 0.001 or left_finger_position > 0.001:
+                    # The gripper is not completely closed
+                    
+                    right_press_pos = right_finger_position - relax_offset
+                    left_press_pos = left_finger_position - relax_offset
+                    press_gripper_future = await self.move_gripper(arm, left_finger=left_press_pos, right_finger=right_press_pos, vel_factor=0.1)
+                    await press_gripper_future.get_result_async()
+                    success = True
+                else:
+                    self.logger.info(f"No object detected by {arm} gripper")
+                    success = False
+            
+            actuator_values = await self.get_gripper_actuator_values(arm)
+            right_finger_current = actuator_values["right_current"]
+            left_finger_current = actuator_values["left_current"]
+            self.get_logger().info(
+                f"Gripper {arm} actuator values after grasp test: "
+                f"Right Current: {right_finger_current}, Left Current: {left_finger_current}"
+            )
+            return success
         else:
-            future = self.open_gripper(arm)
-        self.logger.info(f"DEBUG - OBTAINED ACTION FUTURE")
-        handle = await future
-        self.logger.info(f"DEBUG - OBTAINED HANDLE")
-        result = await handle.get_result_async()
-        self.logger.info(f"DEBUG - OBTAINED RESULT: {result}")
-        success = True if result.result.error_code == 0 else False
-        return success
+            handle = await self.open_gripper(arm)
+            result = await handle.get_result_async()
+            success = True if result.result.error_code == 0 else False
+            # Relax the gripper so that it does not overheat
+            actuator_values = await self.get_gripper_actuator_values(arm)
+            right_finger_current = abs(actuator_values["right_current"])
+            left_finger_current = abs(actuator_values["left_current"])
+            right_finger_position = actuator_values["right_position"]
+            left_finger_position = actuator_values["left_position"]
+            relax_offset = self.gripper_relax_offset    
+            right_relax_pos = right_finger_position
+            left_relax_pos = left_finger_position
+            relax_gripper_future = await self.move_gripper(arm, left_finger=left_relax_pos, right_finger=right_relax_pos, vel_factor=0.1)
+            return success
+
+
+    
+    async def get_gripper_actuator_values(self, arm) -> dict:
+        name_right = f"gripper_{arm}_right_finger_actuator"
+        name_left  = f"gripper_{arm}_left_finger_actuator"
+
+        right_finger_current = await self.actuator_client.send_request_async(
+            name=name_right,
+            characteristic="current_state"
+        )
+        left_finger_current = await self.actuator_client.send_request_async(
+            name=name_left,
+            characteristic="current_state"
+        )
+        right_finger_position = await self.actuator_client.send_request_async(
+            name=name_right,
+            characteristic="position_state"
+        )
+        left_finger_position = await self.actuator_client.send_request_async(
+            name=name_left,
+            characteristic="position_state"
+        )
+        return {
+            "right_current": right_finger_current.value,
+            "left_current": left_finger_current.value,
+            "right_position": right_finger_position.value,
+            "left_position": left_finger_position.value
+        }
     
 def main():
     rclpy.init()

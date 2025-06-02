@@ -1,0 +1,13 @@
+###Service message to control pick and place actions
+
+# Frame of the object to pick or place
+string frame_id 
+
+# Pose where to pick or place and object (Overriden by frame_id)
+float32 x
+float32 y
+float32 z
+---
+bool success
+string status 
+

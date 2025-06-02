@@ -5,46 +5,23 @@ from rclpy.node import Node
 from rclpy.task import Future
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from geometry_msgs.msg import Point
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 
+
+from tiago_dual_moveit_py.service_client import ServiceClientAsync
 from tiago_dual_moveit_py.tiago_dual_moveit_py import TiagoDualPy
 from tf2_ros import Buffer, TransformListener
-from tiago_moveit_py_interfaces.srv import ArmControl, GripperControl, TorsoControl, Trigger
+from tiago_moveit_py_interfaces.srv import ArmControl, GripperControl, PickPlaceAction, TorsoControl, Trigger
+from tiago_moveit_py_interfaces.msg import GripperState
 
-class TiagoDualActions(TiagoDualPy):
-    def __init__(self, name='tiago_dual_actions_moveit_py'):
-        super().__init__(name)
-        
-
-    def change_hands(self, giver_arm, receiver_arm, vel_factor = 0.2, sleep_time=0.1):
-        if (giver_arm != 'right' or giver_arm != 'left') or (receiver_arm != 'right' or receiver_arm != 'left'):
-            self.logger.error('Wrong Arm Selected: Arm must be "left" or "right".')
-        else:
-            self.logger.info("Going to change hands position...")
-            self.arm_go_to_named_pose(arm=giver_arm, pose_name='pre-give', vel_factor=vel_factor, sleep_time=sleep_time)
-            self.arm_go_to_named_pose(arm=receiver_arm, pose_name='pre-collect', vel_factor=vel_factor, sleep_time=sleep_time)
-            self.open_gripper(arm=receiver_arm, vel_factor=vel_factor, sleep_time=sleep_time)
-
-            self.logger.info("Changing hands...")
-            self.arm_go_to_named_pose(arm=giver_arm, pose_name='give', vel_factor=vel_factor, sleep_time=sleep_time)
-            self.arm_go_to_named_pose(arm=receiver_arm, pose_name='collect', vel_factor=vel_factor, sleep_time=vel_factor)
-
-            self.close_gripper(receiver_arm, vel_factor=vel_factor, sleep_time=sleep_time)
-            self.open_gripper(giver_arm, vel_factor=vel_factor, sleep_time=sleep_time)
-
-            self.arm_go_to_named_pose(arm=giver_arm, pose_name='pre-give', vel_factor=vel_factor, sleep_time=sleep_time)
-
-            self.arm_go_to_named_pose(arm=receiver_arm, pose_name='pre-collect', vel_factor=vel_factor, sleep_time=sleep_time)
-            self.logger.info("Hands changed.")
-
-
-class TiagoDualGraspingTest(Node):
+class TiagoDualActions(Node):
     def __init__(self):
         super().__init__('tiago_dual_grasping_test')
         self.enabled = False
 
         #Default positions:
-        self.approach_z = 1.1
-        self.home_z = 1.0
+        self.approach_z = 1.05
+        self.home_z = 0.95
         self.home_x = 0.2
         self.home_y = 0.3
         self.slow_vel = 0.2
@@ -53,27 +30,57 @@ class TiagoDualGraspingTest(Node):
 
         self.client_cb = MutuallyExclusiveCallbackGroup()
         self.server_cb = MutuallyExclusiveCallbackGroup()
+        self.topics_cb = MutuallyExclusiveCallbackGroup()
 
         self.right_arm_client = ServiceClientAsync(self, ArmControl, "tiago_dual/right_arm_command", self.client_cb)
         self.left_arm_client = ServiceClientAsync(self, ArmControl, "tiago_dual/left_arm_command", self.client_cb)
+        self.arm_clients = {
+            'right': self.right_arm_client,
+            'left': self.left_arm_client
+        }
         self.right_gripper_client = ServiceClientAsync(self, GripperControl, "tiago_dual/right_gripper_command", self.client_cb)
         self.left_gripper_client = ServiceClientAsync(self, GripperControl, "tiago_dual/left_gripper_command", self.client_cb)
+        self.gripper_clients = {
+            'right': self.right_gripper_client,
+            'left': self.left_gripper_client
+        }
         self.torso_client = ServiceClientAsync(self, TorsoControl, "tiago_dual/torso_command", self.client_cb)
 
         self.startup_srv = self.create_service(Trigger, "tiago_dual/enable_grasping", self.startup_callback, callback_group=self.server_cb)
         self.disable_srv = self.create_service(Trigger, "tiago_dual/disable_grasping", self.disable_callback, callback_group=self.server_cb)
-        self.pick_srv = self.create_service(ArmControl, "tiago_dual/pick", self.pick_callback, callback_group=self.server_cb)
-        self.place_srv = self.create_service(ArmControl, "tiago_dual/place", self.place_callback, callback_group=self.server_cb)
+        self.pick_srv = self.create_service(PickPlaceAction, "tiago_dual/pick", self.pick_callback, callback_group=self.server_cb)
+        self.place_srv = self.create_service(PickPlaceAction, "tiago_dual/place", self.place_callback, callback_group=self.server_cb)
+        self.change_hands_srv = self.create_service(Trigger, "tiago_dual/change_hands", self.change_hands_callback, callback_group=self.server_cb)
+
+        qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL
+        )
+
+        self.gripper_state_subscriber = self.create_subscription(
+            GripperState, "tiago_dual/gripper_state", self.gripper_state_callback, qos_profile=qos, callback_group=self.topics_cb
+        )
+        self.grasped_right = False
+        self.grasped_left = False
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        self.get_logger().info("Tiago Dual Grasping Test Node Initialized.")        
+        self.get_logger().info("Tiago Dual Grasping Test Node Initialized.")     
+
+    def gripper_state_callback(self, msg: GripperState):
+        """
+        Callback to handle gripper state updates.
+        """
+        self.grasped_right = msg.right.opening > 0.001 and msg.right.current > 0.1
+        self.grasped_left = msg.left.opening > 0.001 and msg.left.current > 0.1
+        self.get_logger().debug(f"Gripper state updated: Right grasped: {self.grasped_right}, Left grasped: {self.grasped_left}") 
 
     async def startup_callback(self, request: Trigger.Request, response: Trigger.Response):
         self.get_logger().info("Startup command received.")
         if not self.enabled:
-            self.enabled = True
             x = self.home_x
             z = self.home_z
             vel = self.fast_vel
@@ -116,7 +123,7 @@ class TiagoDualGraspingTest(Node):
                 response.status = f"Left gripper command failed with code {call_response.status}."
                 return response
 
-
+            self.enabled = True
             response.success = True
             response.status = "Tiago Dual Grasping Test Node is now enabled."
         else:
@@ -157,7 +164,7 @@ class TiagoDualGraspingTest(Node):
                 self.get_logger().info(f"Object {obj_to_pick} detected at x: {x}, y: {y}, z: {z}")
 
             # Constraint the z coordinate to a safe value
-            z = max(z, 0.83) 
+            z = max(z, 0.805) 
 
 
             await self.pick_place_sequence(x, y, z, response, action="pick")
@@ -210,7 +217,53 @@ class TiagoDualGraspingTest(Node):
             response.status = "Tiago Dual Grasping Node is not enabled."
             return response
         
+    async def change_hands_callback(self, request: Trigger.Request, response: Trigger.Response):
+        self.get_logger().info("Change hands command received.")
+        if self.enabled:
+            if self.grasped_right or self.grasped_left:
+                reciever_arm = 'left' if self.grasped_right else 'right'
+                giver_arm = 'right' if reciever_arm == 'left' else 'left'
+                self.get_logger().info(f"Changing hands: {giver_arm} arm will give, {reciever_arm} arm will receive.")
+                # Move the arms to the pre-give and pre-collect positions
+                await self.arm_clients[giver_arm].send_request_async(named_pose='pre-give', vel=self.fast_vel)
+                await self.arm_clients[reciever_arm].send_request_async(named_pose='pre-collect', vel=self.fast_vel)
+                # Open the gripper of the receiving arm
+                await self.gripper_clients[reciever_arm].send_request_async(close=False)
+                # Move the giver arm to the give position
+                await self.arm_clients[giver_arm].send_request_async(named_pose='give', vel=self.slow_vel)
+                # Move the receiver arm to the collect position
+                await self.arm_clients[reciever_arm].send_request_async(named_pose='collect', vel=self.slow_vel)
+                # Close the gripper of the receiving arm
+                await self.gripper_clients[reciever_arm].send_request_async(close=True)
+                # Open the gripper of the giving arm
+                await self.gripper_clients[giver_arm].send_request_async(close=False)
+                # Move the arms back to the pre-give and pre-collect positions
+                await self.arm_clients[giver_arm].send_request_async(named_pose='pre-give', vel=self.slow_vel)
+                await self.arm_clients[reciever_arm].send_request_async(named_pose='pre-collect', vel=self.slow_vel)
+
+                # Move arms to home position
+                self.get_logger().info("Moving arms to home position...")
+                await self.arm_clients[giver_arm].send_request_async(x=self.home_x, y=self.home_y if giver_arm == 'left' else -self.home_y, z=self.home_z, vel=self.fast_vel, grasp_pose=True)
+                await self.arm_clients[reciever_arm].send_request_async(x=self.home_x, y=self.home_y if reciever_arm == 'left' else -self.home_y, z=self.home_z, vel=self.fast_vel, grasp_pose=True)
+                self.get_logger().info("Hands changed successfully.")
+
+
+            else:
+                self.get_logger().error("No object is grasped by either arm. Cannot change hands.")
+                response.success = False
+                response.status = "No object is grasped by either arm. Cannot change hands."
+                return response
+        else:
+            self.get_logger().error("Tiago Dual Grasping Node is not enabled.")
+            response.success = False
+            response.status = "Tiago Dual Grasping Node is not enabled."
+        return response
+
+        
     async def pick_place_sequence(self, x, y, z, response, action=""):
+        success = True
+        status = ""
+
         if y < 0:
             arm=self.right_arm_client
             gripper = self.right_gripper_client
@@ -224,7 +277,15 @@ class TiagoDualGraspingTest(Node):
 
         if action == "pick":
             gripper_action = True
+            if self.grasped_right or self.grasped_left:
+                response.success = False
+                response.status = f"{side} arm already grasping an object. Please release it first."
+                return
         elif action == "place":
+            if (not self.grasped_left and side == "Left") or (not self.grasped_right and side == "Right"):
+                response.success = False
+                response.status = f"{side} arm is not grasping any object. Please pick an object first."
+                return
             gripper_action = False
         else:
             response.success = False
@@ -247,11 +308,13 @@ class TiagoDualGraspingTest(Node):
 
         # Actuate the gripper
         call_response  = await gripper.send_request_async(close = gripper_action)
-        # TODO: Add improved gripper object detection and handling
-        # if not call_response.success:
-        #     response.success = False
-        #     response.status = f"{side} gripper command failed."
-        #     return
+        self.get_logger().info(f"{side} gripper action {action}: call_response: {call_response.success}")
+        
+        if action=="pick" and not call_response.success:
+            status = f"{side} pick action not successful"
+            self.get_logger().error(status)
+            await gripper.send_request_async(close = False)
+            
         
         # Move to the approach position
         call_response = await arm.send_request_async(x=x, y=y, z=self.approach_z, vel=self.slow_vel, grasp_pose=True, cartesian=True)
@@ -288,48 +351,11 @@ class TiagoDualGraspingTest(Node):
             self.get_logger().error(f"Error obtaining transform: {e}")
             return None, e
 
-class ServiceClientAsync():
-    """
-    A generic service client class.
-    """
-    def __init__(self, node:Node, service_type, service_name, callback_group) -> None:
-        """
-        Constructor for the ServiceClient class.
-
-        :param node: ROS2 node that will host the service client
-        :type node: Node
-        :param service_type: Message Interface
-        :type service_type: Any ROS2 service interface
-        :param service_name: Name of the service
-        :type service_name: str
-        :param callback_group: Callback group to assign the service client
-        :type callback_group: rclpy.callback_groups.*
-        """        
-        self.node=node
-        self.cli = self.node.create_client(service_type, service_name, callback_group=callback_group)
-        while not self.cli.wait_for_service(timeout_sec=1.0):
-            self.node.get_logger().info(f'Service {service_name} not available, waiting again...')
-        self.req = service_type.Request()
-
-    def send_request_async(self, **kwargs) -> Future:
-        """
-        Send a request to the service using asyncio.
-
-        :param kwargs: Keyword arguments representing the request parameters.
-        :type kwargs: dict
-        :return: The response from the service.
-        :rtype: type
-        """        
-        for key, value in kwargs.items():
-            setattr(self.req, key, value)
-        self.future = self.cli.call_async(self.req)
-        return self.future
-    
 
 
 def pick_and_place(args=None):
     rclpy.init(args=args)
-    node = TiagoDualGraspingTest()
+    node = TiagoDualActions()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

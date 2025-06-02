@@ -48,6 +48,7 @@ class TiagoDualPy(Node):
         self.cb_client = MutuallyExclusiveCallbackGroup()
         self.cb_internal_client = MutuallyExclusiveCallbackGroup()
         self.cb_server = MutuallyExclusiveCallbackGroup()
+        self.cb_topic = MutuallyExclusiveCallbackGroup()
 
         # instantiate MoveItPy instance and get planning component
         self.tiago_dual = MoveItPy(node_name=name)
@@ -102,7 +103,7 @@ class TiagoDualPy(Node):
         transform.header.stamp = self.get_clock().now().to_msg()
         transform.header.frame_id = "gripper_right_grasping_frame"
         transform.child_frame_id = "custom_gripper_right_grasping_frame"
-        transform.transform.translation.x = 0.05
+        transform.transform.translation.x = 0.08
         transform.transform.translation.y = 0.0
         transform.transform.translation.z = 0.0
         transform.transform.rotation.x = 0.0

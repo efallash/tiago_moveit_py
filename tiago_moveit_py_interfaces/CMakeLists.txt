@@ -15,9 +15,13 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(geometry_msgs REQUIRED)
 
 set(srv_files
+  "msg/Gripper.msg"
+  "msg/GripperState.msg"
   "srv/ArmControl.srv"
+  "srv/GetActuator.srv"
   "srv/GripperControl.srv"
   "srv/Perception.srv"
+  "srv/PickPlaceAction.srv"
   "srv/TorsoControl.srv"
   "srv/Trigger.srv"
 )
