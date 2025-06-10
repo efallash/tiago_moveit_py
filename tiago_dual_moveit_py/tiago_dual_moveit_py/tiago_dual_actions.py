@@ -143,13 +143,13 @@ class TiagoDualActions(Node):
             response.status = "Tiago Dual Grasping Test Node is already disabled."
             return response
     
-    async def pick_callback(self, request: ArmControl.Request, response: ArmControl.Response):
+    async def pick_callback(self, request: PickPlaceAction.Request, response: PickPlaceAction.Response):
         self.get_logger().info("Pick command received.")
         if self.enabled:
             x = request.x
             y = request.y
             z = request.z
-            obj_to_pick = request.named_pose
+            obj_to_pick = request.frame_id
 
             if obj_to_pick:
                 # Obtain the transform between the object and the base frame
@@ -164,7 +164,7 @@ class TiagoDualActions(Node):
                 self.get_logger().info(f"Object {obj_to_pick} detected at x: {x}, y: {y}, z: {z}")
 
             # Constraint the z coordinate to a safe value
-            z = max(z, 0.805) 
+            z = max(z, 0.81)
 
 
             await self.pick_place_sequence(x, y, z, response, action="pick")
@@ -180,13 +180,13 @@ class TiagoDualActions(Node):
             response.status = "Tiago Dual Grasping Node is not enabled."
             return response
 
-    async def place_callback(self, request: ArmControl.Request, response: ArmControl.Response):
+    async def place_callback(self, request: PickPlaceAction.Request, response: PickPlaceAction.Response):
         self.get_logger().info("Place command received.")
         if self.enabled:
             x = request.x
             y = request.y
             z = request.z
-            obj_to_pick = request.named_pose
+            obj_to_pick = request.frame_id
 
             if obj_to_pick:
                 # Obtain the transform between the object and the base frame
@@ -219,6 +219,11 @@ class TiagoDualActions(Node):
         
     async def change_hands_callback(self, request: Trigger.Request, response: Trigger.Response):
         self.get_logger().info("Change hands command received.")
+        await self.change_hands_sequence(response)
+        return response
+
+    async def change_hands_sequence(self, response):
+        
         if self.enabled:
             if self.grasped_right or self.grasped_left:
                 reciever_arm = 'left' if self.grasped_right else 'right'
@@ -233,10 +238,10 @@ class TiagoDualActions(Node):
                 await self.arm_clients[giver_arm].send_request_async(named_pose='give', vel=self.slow_vel)
                 # Move the receiver arm to the collect position
                 await self.arm_clients[reciever_arm].send_request_async(named_pose='collect', vel=self.slow_vel)
-                # Close the gripper of the receiving arm
-                await self.gripper_clients[reciever_arm].send_request_async(close=True)
                 # Open the gripper of the giving arm
                 await self.gripper_clients[giver_arm].send_request_async(close=False)
+                # Close the gripper of the receiving arm
+                gripper_response = await self.gripper_clients[reciever_arm].send_request_async(close=True)
                 # Move the arms back to the pre-give and pre-collect positions
                 await self.arm_clients[giver_arm].send_request_async(named_pose='pre-give', vel=self.slow_vel)
                 await self.arm_clients[reciever_arm].send_request_async(named_pose='pre-collect', vel=self.slow_vel)
@@ -245,7 +250,18 @@ class TiagoDualActions(Node):
                 self.get_logger().info("Moving arms to home position...")
                 await self.arm_clients[giver_arm].send_request_async(x=self.home_x, y=self.home_y if giver_arm == 'left' else -self.home_y, z=self.home_z, vel=self.fast_vel, grasp_pose=True)
                 await self.arm_clients[reciever_arm].send_request_async(x=self.home_x, y=self.home_y if reciever_arm == 'left' else -self.home_y, z=self.home_z, vel=self.fast_vel, grasp_pose=True)
-                self.get_logger().info("Hands changed successfully.")
+
+                if getattr(self, f'grasped_{reciever_arm}') and gripper_response.success:
+                    status = "Hands changed successfully."
+                    self.get_logger().info(status)
+                    response.success = True
+                    response.status = status
+                else:
+                    await self.gripper_clients[reciever_arm].send_request_async(close=False)  # Ensure the gripper is open
+                    status = f"Object transfer failed"
+                    self.get_logger().error(status)
+                    response.success = False
+                    response.status = status
 
 
             else:
@@ -257,43 +273,57 @@ class TiagoDualActions(Node):
             self.get_logger().error("Tiago Dual Grasping Node is not enabled.")
             response.success = False
             response.status = "Tiago Dual Grasping Node is not enabled."
-        return response
+
 
         
     async def pick_place_sequence(self, x, y, z, response, action=""):
         success = True
         status = ""
 
-        if y < 0:
-            arm=self.right_arm_client
-            gripper = self.right_gripper_client
-            y_sign = -1
-            side = "Right"
-        else:
-            arm=self.left_arm_client
-            gripper = self.left_gripper_client
-            y_sign = 1
-            side = "Left"
-
+        # Configure the sequence based on the action
         if action == "pick":
+            # Determine which arm to use based on the y coordinate
+            if y < 0:
+                side = "Right"
+            else:
+                side = "Left"
+
             gripper_action = True
             if self.grasped_right or self.grasped_left:
                 response.success = False
-                response.status = f"{side} arm already grasping an object. Please release it first."
+                response.status = f"Arms already grasping an object. Please release it first."
                 return
         elif action == "place":
-            if (not self.grasped_left and side == "Left") or (not self.grasped_right and side == "Right"):
+            if (not self.grasped_left) and (not self.grasped_right):
                 response.success = False
-                response.status = f"{side} arm is not grasping any object. Please pick an object first."
+                response.status = f"No arm is grasping any object. Please pick an object first."
                 return
+            elif self.grasped_right:
+                side = "Right"
+            else:
+                side = "Left"
             gripper_action = False
         else:
             response.success = False
             response.status = "Invalid action. Use 'pick' or 'place'."
             return
+        
+        # Determine the arm and gripper to use
+        if side == "Right":
+            arm=self.right_arm_client
+            gripper = self.right_gripper_client
+            y_sign = -1
+        elif side == "Left":
+            arm=self.left_arm_client
+            gripper = self.left_gripper_client
+            y_sign = 1
+        else:
+            response.success = False
+            response.status = "Invalid side. Use 'Right' or 'Left'."
+            return
 
         # Move to approach position
-        call_response = await arm.send_request_async(x=x, y=y, z=self.approach_z, vel=self.fast_vel, grasp_pose=True)
+        call_response = await arm.send_request_async(x=x, y=y, z=self.approach_z, vel=self.fast_vel, grasp_pose=True, cartesian=True)
         if not call_response.success:
             response.success = False
             response.status = f"{side} arm command failed with code {call_response.status}."
@@ -324,7 +354,7 @@ class TiagoDualActions(Node):
             return
         
         # Move to the home position
-        call_response = await arm.send_request_async(x=self.home_x, y=y_sign*self.home_y, z=self.home_z, vel=self.fast_vel, grasp_pose=True)
+        call_response = await arm.send_request_async(x=self.home_x, y=y_sign*self.home_y, z=self.home_z, vel=self.fast_vel, grasp_pose=True, cartesian=True)
         if not call_response.success:
             response.success = False
             response.status = f"{side} arm command failed with code {call_response.status}."
@@ -351,11 +381,53 @@ class TiagoDualActions(Node):
             self.get_logger().error(f"Error obtaining transform: {e}")
             return None, e
 
+class TiagoDemo(Node):
+    def __init__(self):
+        super().__init__('tiago_demo')
+        # Create separate callback groups for each client and the service
+        self.server_cb = MutuallyExclusiveCallbackGroup()
+        self.client_cb = MutuallyExclusiveCallbackGroup()
 
+
+        from tiago_dual_moveit_py.service_client import ServiceClientAsync
+        from tiago_moveit_py_interfaces.srv import PickPlaceAction, Trigger
+
+        self.pick_client = ServiceClientAsync(self, PickPlaceAction, "tiago_dual/pick", self.client_cb)
+        self.place_client = ServiceClientAsync(self, PickPlaceAction, "tiago_dual/place", self.client_cb)
+        self.change_hands_client = ServiceClientAsync(self, Trigger, "tiago_dual/change_hands", self.client_cb)
+        self.demo_srv = self.create_service(Trigger, "tiago_dual/demo", self.demo_callback, callback_group=self.server_cb)
+        self.get_logger().info("TiagoDemo node initialized.")
+
+    async def demo_callback(self, request, response):
+        
+        self.get_logger().info("Demo command received.")
+        # Pick 
+        
+        await self.pick_client.send_request_async(frame_id="detection_lettuce_1")
+        await self.change_hands_client.send_request_async()
+        await self.place_client.send_request_async(frame_id="detection_pocket_1")
+
+        await self.pick_client.send_request_async(frame_id="detection_apple_1")
+        await self.change_hands_client.send_request_async()
+        await self.place_client.send_request_async(frame_id="detection_basket_1")
+    
+        self.get_logger().info("Demo sequence completed.")
+        response.success = True
+        response.status = "Demo sequence completed successfully."
+        return response
 
 def pick_and_place(args=None):
     rclpy.init(args=args)
     node = TiagoDualActions()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        node.destroy_node()
+        rclpy.shutdown()
+
+def main_demo(args=None):
+    rclpy.init(args=args)
+    node = TiagoDemo()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

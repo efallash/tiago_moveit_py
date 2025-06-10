@@ -29,6 +29,7 @@ setup(
             'workspace_test = tiago_dual_moveit_py.workspace_test:main',
             'pick_and_place = tiago_dual_moveit_py.tiago_dual_actions:pick_and_place',
             'tiago_dual_controller_monitor = tiago_dual_moveit_py.tiago_dual_controller_monitor:main',
+            'tiago_demo = tiago_dual_moveit_py.tiago_dual_actions:main_demo',
         ],
     },
 )

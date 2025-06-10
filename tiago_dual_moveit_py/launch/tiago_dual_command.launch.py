@@ -153,4 +153,12 @@ def start_move_group(context, *args, **kwargs):
         parameters=move_group_params,
     )
 
-    return [moveit_py_node]
+    controller_monitor = Node(
+        name="tiago_dual_controller_monitor",
+        package="tiago_dual_moveit_py",
+        executable="tiago_dual_controller_monitor",
+        output="both",
+        parameters=[],
+    )
+
+    return [moveit_py_node, controller_monitor]
