@@ -20,7 +20,6 @@ set(srv_files
   "srv/ArmControl.srv"
   "srv/GetActuator.srv"
   "srv/GripperControl.srv"
-  "srv/Perception.srv"
   "srv/PickPlaceAction.srv"
   "srv/TorsoControl.srv"
   "srv/Trigger.srv"
