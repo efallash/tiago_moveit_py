@@ -392,7 +392,8 @@ class TiagoDualActions(Node):
                 last_error = f"Left arm command failed returning to home position with code {call_response.status}."
 
             # Open gripper
-            await gripper.send_request_async(close=False)
+            if not self.grasped_left:
+                await gripper.send_request_async(close=False)
 
             if last_error:
                 response.success = False
